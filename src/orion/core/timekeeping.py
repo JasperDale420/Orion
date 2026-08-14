@@ -37,6 +37,21 @@ def last_closed_trading_date(ts_utc: datetime | None = None, *, calendar_name: s
     return session.date()
 
 
+def closed_sessions_between(after: date, through: date, *, calendar_name: str = "XNYS") -> list[date]:
+    """XNYS sessions strictly after ``after``, up to and including ``through``.
+
+    Lets the EOD close-of-books advance its cursor one session at a time instead
+    of jumping straight to the newest one: if ingestion is down Thursday night
+    and resumes after Friday's close, Thursday must still be reconciled rather
+    than silently skipped. Returns [] when ``through <= after``.
+    """
+    if through <= after:
+        return []
+    cal = xcals.get_calendar(calendar_name)
+    sessions = cal.sessions_in_range(pd.Timestamp(after), pd.Timestamp(through))
+    return [s.date() for s in sessions if s.date() > after]
+
+
 @dataclass(frozen=True)
 class SessionBands:
     pre_start: time = time(4, 0)

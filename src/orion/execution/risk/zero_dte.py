@@ -13,13 +13,28 @@ class ZeroDteGuard:
 
     @staticmethod
     def _minutes_to_market_close(timestamp: datetime | None) -> float:
+        """Minutes until the session actually closes — 13:00 ET on half days.
+
+        A fixed 16:00 assumption reports 240 minutes remaining at noon on an
+        early-close day, so the cutoff and size-reduction windows never engage
+        and a full-size 0DTE gets opened an hour before expiry.
+        """
         from zoneinfo import ZoneInfo
+
+        from orion.core.market_schedule import resolve_session_close
 
         if timestamp is None:
             timestamp = datetime.now(ZoneInfo("America/New_York"))
         elif timestamp.tzinfo is None:
             timestamp = timestamp.replace(tzinfo=ZoneInfo("America/New_York"))
-        market_close = timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
+        # Outside a session there is no close to count down to; the fixed
+        # 16:00 keeps the pre-open behaviour these windows were tuned on.
+        session_close = resolve_session_close(timestamp)
+        market_close = (
+            session_close.astimezone(timestamp.tzinfo)
+            if session_close is not None
+            else timestamp.replace(hour=16, minute=0, second=0, microsecond=0)
+        )
         return (market_close - timestamp).total_seconds() / 60
 
     def check_zero_dte_winddown(

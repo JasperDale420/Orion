@@ -206,11 +206,13 @@ async def test_restart_uses_fill_cost_basis_not_broker_avg_entry(monkeypatch):
 async def test_restart_realizes_pnl_correctly_after_cost_basis_fix(monkeypatch):
     """
     End-to-end PnL sanity: buy 10 at $2.00, restart, then sell 10 at $3.00.
-    RiskManager.process_fill must compute realized_pnl = (3.00-2.00)*10 = $10.
+    The symbol is an OCC option, so realized_pnl must be
+    (3.00-2.00)*10*100 = $1,000 — premiums are quoted per share and traded in
+    100-share contracts.
 
     If broker's contaminated avg_entry_price (say $5.00) were used instead,
-    process_fill would compute (3.00-5.00)*10 = -$20 — wrong and kill-switch-
-    triggering.
+    process_fill would compute (3.00-5.00)*10*100 = -$2,000 — wrong and
+    kill-switch-triggering.
     """
     from orion.execution.risk.manager import RiskManager
 
@@ -229,8 +231,8 @@ async def test_restart_realizes_pnl_correctly_after_cost_basis_fix(monkeypatch):
 
     outcome = await risk.process_fill(sym, 10.0, 3.00, "sell", fill_id="close_pnl1")
 
-    assert outcome.realized_pnl == pytest.approx(10.00), (
-        f"realized_pnl should be (3.00-2.00)*10=$10.00 using fill-derived entry; "
+    assert outcome.realized_pnl == pytest.approx(1000.00), (
+        f"realized_pnl should be (3.00-2.00)*10*100=$1,000.00 using fill-derived entry; "
         f"got {outcome.realized_pnl!r} (likely used contaminated broker avg_entry_price)"
     )
 

@@ -215,3 +215,48 @@ def test_fallback_rules_called_once_per_tracked_position(monkeypatch):
         f"`from orion.execution.exit_fallback_rules import evaluate_fallback_rules` "
         f"inside `PositionMonitor.evaluate_exits` still wraps every position."
     )
+
+
+# --- Test 4: the session close reaches the 0DTE flatten rule ----------------
+
+
+def test_session_close_resolved_once_and_passed_to_fallback_rules(monkeypatch):
+    """The 0DTE flatten deadline is derived from the session close, so an
+    early-close day flattens before 13:00 ET instead of never. If the monitor
+    stops passing it, every 0DTE reverts to the 16:00-close assumption.
+    """
+    from types import SimpleNamespace
+
+    from orion.execution import exit_fallback_rules as efr
+
+    session_close = datetime(2026, 11, 27, 18, 0, tzinfo=UTC)  # 13:00 ET half day
+    resolve_calls: list[object] = []
+    seen_session_close: list[object] = []
+
+    def _fake_resolve(*args, **kwargs):
+        resolve_calls.append(args)
+        return session_close
+
+    real_fn = efr.evaluate_fallback_rules
+
+    def _spy(position, **kwargs):
+        seen_session_close.append(kwargs.get("session_close"))
+        return real_fn(position, **kwargs)
+
+    monkeypatch.setattr("orion.core.market_schedule.resolve_session_close", _fake_resolve)
+    monkeypatch.setattr(efr, "evaluate_fallback_rules", _spy)
+
+    class _ClassifierBenign:
+        def predict(self, _features):
+            return SimpleNamespace(should_exit=False, confidence=0.0, reasoning="hold")
+
+    monitor = _build_monitor_with_classifier(_ClassifierBenign())
+    monitor.tracked_positions = {
+        f"POS_{i}": _tracked_position(symbol=f"POS_{i}", return_pct_value=10.0, bucket="SWING") for i in range(3)
+    }
+
+    monitor.evaluate_exits()
+
+    assert seen_session_close == [session_close] * 3
+    # One calendar lookup per cycle, not per position.
+    assert len(resolve_calls) == 1

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from orion.core.market_schedule import MarketSchedule
+from orion.core.market_schedule import MarketSchedule, resolve_session_close
 
 
 @pytest.fixture
@@ -128,3 +128,71 @@ def test_options_market_closed_at_close_bell(schedule):
         pytest.skip("Calendar not loaded")
     close_bell = datetime(2026, 5, 19, 20, 0, 0, tzinfo=UTC)
     assert schedule.is_market_open_for_options(close_bell) is False
+
+
+# --- resolve_session_close --------------------------------------------------
+#
+# The 0DTE flatten deadline and the 0DTE entry wind-down both derive their
+# time-of-day windows from this, so an early close must be visible to it and
+# a dead calendar must not read as "16:00 as usual".
+
+
+def _et(hour: int, minute: int) -> datetime:
+    from zoneinfo import ZoneInfo
+
+    return datetime(2026, 11, 27, hour, minute, tzinfo=ZoneInfo("America/New_York"))
+
+
+def test_resolve_session_close_returns_calendar_close(monkeypatch):
+    close = _et(13, 0)  # 2026-11-27 is the day after Thanksgiving: a half day
+
+    class _Schedule:
+        def get_todays_close(self, _ts):
+            return close
+
+    monkeypatch.setattr("orion.core.market_schedule.MarketSchedule", _Schedule)
+    assert resolve_session_close(_et(12, 0)) == close
+
+
+def test_resolve_session_close_none_outside_session(monkeypatch):
+    """No session in progress is not a failure — callers keep their fixed cutoff."""
+
+    class _Schedule:
+        def get_todays_close(self, _ts):
+            return None
+
+    monkeypatch.setattr("orion.core.market_schedule.MarketSchedule", _Schedule)
+    assert resolve_session_close(_et(18, 0)) is None
+
+
+def test_resolve_session_close_fails_safe_when_calendar_unavailable(monkeypatch):
+    """Calendar down: assume the earliest close NYSE runs (13:00 ET) rather
+    than leaving the only 0DTE expiry protection on a 16:00 assumption."""
+
+    class _Schedule:
+        def get_todays_close(self, _ts):
+            raise RuntimeError("Cannot determine today's close without calendar")
+
+    monkeypatch.setattr("orion.core.market_schedule.MarketSchedule", _Schedule)
+    assert resolve_session_close(_et(12, 0)) == _et(13, 0)
+
+
+def test_resolve_session_close_treats_naive_close_as_utc(monkeypatch):
+    class _Schedule:
+        def get_todays_close(self, _ts):
+            return _et(13, 0).astimezone(UTC).replace(tzinfo=None)
+
+    monkeypatch.setattr("orion.core.market_schedule.MarketSchedule", _Schedule)
+    assert resolve_session_close(_et(12, 0)) == _et(13, 0)
+
+
+def test_resolve_session_close_reads_a_real_early_close(schedule):
+    """End-to-end against the bundled XNYS calendar, no mocks: the day after
+    Thanksgiving 2026 closes at 13:00 ET, not 16:00."""
+    if not schedule.calendar:
+        pytest.skip("Calendar not loaded")
+    close = resolve_session_close(_et(12, 0))
+    assert close is not None
+    from zoneinfo import ZoneInfo
+
+    assert close.astimezone(ZoneInfo("America/New_York")).hour == 13

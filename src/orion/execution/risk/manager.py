@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 from orion.config import RiskSettings, risk_settings
 from orion.core.enums import OrderSide
+from orion.execution.attribution import is_occ_option_symbol
 from orion.execution.risk.greeks import GreeksTracker
 from orion.execution.risk.sector import SectorTracker
 from orion.execution.risk.sizing import PositionSizer
@@ -27,6 +28,39 @@ if TYPE_CHECKING:
     from orion.shared.metrics import Metrics
 
 logger = setup_struct_logger(__name__)
+
+# Dollars represented by 1.00 of an option's quoted price. Options are quoted
+# per share but trade in 100-share contracts.
+_OPTION_CONTRACT_MULTIPLIER = 100.0
+
+# Accounting convention for the persisted `risk_state` money columns.
+#   1 (or NULL) — option realized P&L recorded WITHOUT the contract multiplier,
+#                 i.e. at 1/100th scale. Untrusted; migration required.
+#   2           — option realized P&L recorded in true dollars.
+# The version is stored ON the row (`RiskState.accounting_version`) so provenance
+# travels with the data: an external flag could not prove which convention wrote
+# a given row. Bump this whenever the meaning of those columns changes.
+RISK_ACCOUNTING_VERSION = 2
+
+
+def _contract_multiplier(symbol: str | None) -> float:
+    """Dollars per 1.00 of quoted price: 100 for an OCC option, 1 for equity.
+
+    Applies ONLY on the fill path (``process_fill``), which receives the OCC
+    contract symbol and a raw per-share premium straight from the broker fill.
+    Omitting it there understated realized PnL — and therefore
+    ``current_daily_loss``, the kill-switch input — by 100x: a real $3,879 loss
+    booked as $38.79.
+
+    The order-admission path is denominated differently and must NOT use this:
+    ``check_order`` / ``check_options_order`` / ``update_post_trade`` are called
+    with the UNDERLYING ticker, and ``execution_engine`` pre-multiplies via
+    ``notional = option_price * 100``. Applying the factor there would either
+    double-count or silently no-op on the underlying symbol.
+
+    ``jobs/reconcile_pnl.py`` applies the same factor for OCC symbols.
+    """
+    return _OPTION_CONTRACT_MULTIPLIER if is_occ_option_symbol(symbol) else 1.0
 
 
 @dataclass(frozen=True)
@@ -89,6 +123,14 @@ class RiskManager:
         # only mutate `current_equity` from Orion-attributed fills via
         # `update_post_fill` (line 590).
         self._equity_seeded = False
+
+        # Fail-closed admission gate. Set by `initialize()` when a persisted
+        # risk_state row exists but no operator baseline has been recorded at
+        # the current RISK_ACCOUNTING_VERSION — i.e. the stored loss/equity may
+        # be pre-multiplier (1/100th scale) and cannot arm the kill switch.
+        # Defaults False so a directly-constructed manager (unit tests, fresh
+        # process that never loads state) behaves exactly as before.
+        self.baseline_unverified = False
 
         # Track full position details (qty, avg_entry)
         self.positions: dict[str, dict[str, float]] = {}
@@ -212,7 +254,18 @@ class RiskManager:
         risk_override: RiskSettings | None = None,
     ) -> bool:
         """Returns True if the order is safe to execute, False otherwise."""
+        if self.baseline_unverified:
+            logger.error(
+                "RISK REJECT: risk baseline unverified — persisted loss/equity may be pre-multiplier. "
+                "Record a verified baseline to re-enable order admission.",
+                extra={"event_type": "RISK_REJECT_BASELINE_UNVERIFIED", "ticker": ticker},
+            )
+            return False
+
         cfg = self._resolve_config(risk_override)
+        # `price` is caller-denominated: the options path passes
+        # `notional = option_price * 100` (execution_engine) so this is already
+        # USD. Do NOT apply _contract_multiplier here — it would double-count.
         estimated_cost = quantity * price
 
         if not self._check_time_bans(cfg, timestamp):
@@ -336,6 +389,7 @@ class RiskManager:
         signed_current_exposure = 0.0
         if ticker in self.positions:
             pos = self.positions[ticker]
+            # `price` arrives already USD-denominated from check_order (see there).
             signed_current_exposure = pos["qty"] * price
 
         effective_signed = signed_current_exposure + pending_exposure
@@ -538,7 +592,14 @@ class RiskManager:
 
     @db_retry
     async def initialize(self) -> None:
-        """Loads risk state from DB (if exists) to survive restarts."""
+        """Loads risk state from DB (if exists) to survive restarts.
+
+        Fails CLOSED on the admission gate: the gate is raised before the read
+        and lowered only once the read proves the persisted state is safe. A
+        transient DB failure here must not admit orders against a legacy ledger,
+        so every exception path leaves the gate raised.
+        """
+        self.baseline_unverified = True
         try:
             from sqlalchemy import select
 
@@ -568,7 +629,29 @@ class RiskManager:
                     # equity on the next poll.
                     self._equity_seeded = True
                     logger.info(f"Risk State Loaded: DailyLoss={self.current_daily_loss}")
+                    # Provenance travels on the row: only a row stamped with the
+                    # current convention may arm the kill switch.
+                    row_version = getattr(state, "accounting_version", None)
+                    self.baseline_unverified = row_version != RISK_ACCOUNTING_VERSION
+                    if self.baseline_unverified:
+                        logger.critical(
+                            "Risk baseline UNVERIFIED — order admission blocked. Persisted risk_state carries "
+                            f"accounting_version={row_version!r}, required {RISK_ACCOUNTING_VERSION}: its loss and "
+                            "equity figures may be at 1/100th scale (option P&L recorded without the contract "
+                            "multiplier), so the daily-loss and drawdown gates cannot be trusted. Record a "
+                            "verified baseline to re-enable entries.",
+                            extra={
+                                "event_type": "RISK_BASELINE_UNVERIFIED",
+                                "current_daily_loss": self.current_daily_loss,
+                                "current_equity": self.current_equity,
+                                "row_version": row_version,
+                                "required_version": RISK_ACCOUNTING_VERSION,
+                            },
+                        )
                 else:
+                    # A fresh DB has no legacy figures to mis-scale; the first
+                    # `_save_state` stamps the current version.
+                    self.baseline_unverified = False
                     logger.info("No persisted Risk State found.")
 
             # Restore in-flight orders so the first cycle after restart
@@ -602,12 +685,38 @@ class RiskManager:
                 state = RiskState(id="global_risk_v1")
                 session.add(state)
 
+            if self.baseline_unverified and state.accounting_version == RISK_ACCOUNTING_VERSION:
+                # Another process recorded a verified baseline while this one
+                # was still holding the legacy figures it loaded at startup.
+                # Writing them now would leave the row carrying stale
+                # 1/100th-scale money under the new version stamp, and the next
+                # restart would trust it. Discard this snapshot entirely; the
+                # operator must restart the service to pick up the baseline.
+                logger.critical(
+                    "Discarding risk-state save: a verified baseline was recorded by another process while "
+                    "this one held unverified legacy figures. RESTART THIS SERVICE to load the new baseline.",
+                    extra={
+                        "event_type": "RISK_STATE_SAVE_DISCARDED_STALE",
+                        "in_memory_daily_loss": self.current_daily_loss,
+                        "in_memory_equity": self.current_equity,
+                        "row_version": state.accounting_version,
+                    },
+                )
+                return
+
             state.updated_at_utc = datetime.now(UTC)
             state.current_daily_loss = self.current_daily_loss
             state.current_equity = self.current_equity
             state.starting_equity = self.starting_equity
             state.peak_equity = self.peak_equity
             state.open_positions_count = self.open_positions
+            # Stamp provenance ONLY when these figures are genuinely on the
+            # current convention. While the gate is raised the in-memory totals
+            # still carry the legacy 1/100th-scale values loaded from this row;
+            # stamping them would forge provenance and silently lower the gate
+            # on the next restart. Leave the existing version (or NULL) alone.
+            if not self.baseline_unverified:
+                state.accounting_version = RISK_ACCOUNTING_VERSION
 
         await db_write(save_risk_state)
         logger.info("Risk state persisted to DB")
@@ -715,10 +824,11 @@ class RiskManager:
 
             qty_closing = min(abs(old_qty), abs(signed_fill_qty))
 
+            multiplier = _contract_multiplier(ticker)
             if old_qty > 0:
-                pnl = (price - old_entry) * qty_closing
+                pnl = (price - old_entry) * qty_closing * multiplier
             else:
-                pnl = (old_entry - price) * qty_closing
+                pnl = (old_entry - price) * qty_closing * multiplier
 
             realized_pnl = pnl
 
@@ -749,7 +859,7 @@ class RiskManager:
             else:
                 self.positions[ticker] = {"qty": new_qty, "avg_entry": old_entry}
 
-        self.ticker_exposures[ticker] = abs(new_qty * price)
+        self.ticker_exposures[ticker] = abs(new_qty * price * _contract_multiplier(ticker))
         self.open_positions = sum(1 for p in self.positions.values() if not math.isclose(p["qty"], 0, abs_tol=1e-9))
 
         # Keep portfolio greeks tracking reality so the projected-greek gate on
@@ -769,7 +879,7 @@ class RiskManager:
 
         metrics = _get_metrics()
         if metrics is not None:
-            metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price))
+            metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price * _contract_multiplier(ticker)))
 
         return FillOutcome(realized_pnl=realized_pnl, is_closing=is_closing)
 

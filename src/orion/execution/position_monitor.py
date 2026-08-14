@@ -55,6 +55,35 @@ def _dte_from_occ_symbol(symbol: str) -> int | None:
     return (expiry - datetime.now(UTC).date()).days
 
 
+def _expiry_from_occ_symbol(symbol: str | None) -> datetime | None:
+    """Expiry (tz-aware UTC) parsed from an OCC symbol, or None for equity.
+
+    The expiry is encoded in the contract symbol, so it is always derivable
+    without a database round-trip. `TimeToExpiryRule` silently no-ops on a
+    missing `expiry_date`, and the entry-context join has fallbacks that omit it
+    (no matching decision, fetch error, timeout) — so relying on the DB alone
+    left positions with no time-stop at all, riding to expiry where Alpaca
+    auto-exercises the ITM ones into equity Orion never opened.
+    """
+    from orion.shared.utils import parse_occ_symbol
+
+    if not symbol:
+        return None
+    expiry_str = parse_occ_symbol(symbol).get("expiry")
+    if not isinstance(expiry_str, str):
+        return None
+    try:
+        parsed = datetime.strptime(expiry_str, "%Y-%m-%d")
+    except ValueError:
+        return None
+    # MIDNIGHT UTC, matching how `candidate_trades.expiration_date` is stored,
+    # so the fallback and the DB path produce identical exit timing. End-of-day
+    # would push the rule's 24h-multiple comparison past the intended session:
+    # a Friday expiry with min_dte=2 would only reach the threshold at 19:59 ET
+    # Wednesday — after the close — leaving expiry day as the next chance.
+    return parsed.replace(tzinfo=UTC)
+
+
 def _bucket_from_occ_symbol(symbol: str) -> str | None:
     """Bucket derived from the OCC symbol's embedded expiry (current DTE).
 
@@ -67,6 +96,44 @@ def _bucket_from_occ_symbol(symbol: str) -> str | None:
     from orion.execution.exit_fallback_rules import bucket_for_dte
 
     return bucket_for_dte(dte)
+
+
+def _is_exercise_residue_candidate(symbol: str | None, orion_option_underlyings: set[str]) -> bool:
+    """True when an unattributed EQUITY position looks like Orion's own exercise.
+
+    Alpaca auto-exercises ITM long options at expiry, producing an equity
+    position with no order and no fill — so it never appears in
+    `_fetch_orion_attributed_tickers` and Orion cannot see, size against, or
+    exit it (the exit path is options-only).
+
+    Attribution works off Orion's own option history rather than the fills
+    ledger, because the fill record for the originating contract may be missing
+    (that is exactly how BABA went unnoticed). The shared account makes this a
+    judgement call, so it only ever produces an ALERT — never silent adoption of
+    a position that might belong to a sibling system.
+    """
+    if not symbol or _is_occ_option_symbol(symbol):
+        return False
+    return symbol in orion_option_underlyings
+
+
+async def _fetch_orion_option_underlyings() -> set[str]:
+    """Underlyings Orion has ever traded options on, from its own candidates."""
+    from sqlalchemy import select
+
+    from orion.shared.db_utils import db_query
+    from orion.storage.models_gold import CandidateTrade
+
+    async def _read(session: Any) -> list[Any]:
+        stmt = select(CandidateTrade.ticker).where(CandidateTrade.option_symbol.is_not(None)).distinct()
+        return list((await session.execute(stmt)).scalars().all())
+
+    try:
+        return {t for t in await db_query(_read) if t}
+    except Exception as exc:
+        # Non-fatal: this only drives an advisory alert.
+        logger.warning(f"Could not load Orion option underlyings for exercise-residue check: {exc}")
+        return set()
 
 
 async def _fetch_orion_attributed_tickers() -> set[str]:
@@ -136,6 +203,9 @@ class GatewayPositionAdapter:
     def __init__(self, gateway_client: Any) -> None:
         self._client = gateway_client
         self._cached_positions: list[SimpleNamespace] = []
+        # Symbols already alerted on as likely exercise residue, so a standing
+        # position doesn't page every refresh.
+        self._residue_alerted: set[str] = set()
 
     def get_all_positions(self) -> list[SimpleNamespace]:
         """Synchronous wrapper — the actual fetch happens in `refresh()`,
@@ -176,6 +246,7 @@ class GatewayPositionAdapter:
             return
 
         filtered: list[SimpleNamespace] = []
+        unattributed: list[dict[str, Any]] = []
         for p in raw:
             symbol = p.get("symbol", "")
             # `orion_tickers` now comes from `fills.ticker`, which stores
@@ -195,7 +266,10 @@ class GatewayPositionAdapter:
                         unrealized_plpc=p.get("unrealized_plpc", 0),
                     )
                 )
+            else:
+                unattributed.append(p)
 
+        await self._alert_exercise_residue(unattributed)
         self._cached_positions = filtered
 
         if len(filtered) != len(raw):
@@ -207,6 +281,53 @@ class GatewayPositionAdapter:
                     "raw_count": len(raw),
                     "kept_count": len(filtered),
                     "skipped_count": len(raw) - len(filtered),
+                },
+            )
+
+    async def _alert_exercise_residue(self, unattributed: list[dict[str, Any]]) -> None:
+        """Alert on equity that looks like Orion's own auto-exercised option.
+
+        Advisory only — it never adopts the position, because on a shared
+        account the evidence is circumstantial. Alerts once per symbol per
+        process so a standing position does not page every 60s.
+        """
+        equities = [p for p in unattributed if not _is_occ_option_symbol(p.get("symbol", ""))]
+        # Release the dedup entry once a position is gone, so a LATER exercise
+        # on the same underlying alerts again instead of being suppressed for
+        # the life of the process (and so a false positive can't mask a real
+        # residue later).
+        present = {p.get("symbol", "") for p in equities}
+        self._residue_alerted &= present
+        if not equities:
+            return
+        candidates = [p for p in equities if p.get("symbol") not in self._residue_alerted]
+        if not candidates:
+            return
+
+        underlyings = await _fetch_orion_option_underlyings()
+        for p in candidates:
+            symbol = p.get("symbol", "")
+            if not _is_exercise_residue_candidate(symbol, underlyings):
+                continue
+            self._residue_alerted.add(symbol)
+            # Deliberately does NOT instruct a close. The account is shared, and
+            # Orion's own order/decision records for an exercised contract may
+            # be missing (BABA had 11 candidates but 0 EXECUTE rows), so this
+            # cannot be strengthened into proof of ownership from local data —
+            # it points the operator at the authoritative check instead.
+            logger.critical(
+                f"UNATTRIBUTED EQUITY {symbol}: Orion has traded options on this underlying and cannot "
+                "see, size against, or exit an equity position (its exit path is options-only). This may "
+                "be its own ITM contract auto-exercised at expiry, or a sibling system's position. "
+                "VERIFY before acting: GET /api/v1/alpaca/account/activities?activity_types=OPEXC (and "
+                "OPASN) and match the contract's underlying, quantity (contracts x 100) and strike+premium "
+                "against this position's avg_entry_price.",
+                extra={
+                    "event_type": "EXERCISE_RESIDUE_DETECTED",
+                    "symbol": symbol,
+                    "qty": p.get("qty"),
+                    "market_value": p.get("market_value"),
+                    "avg_entry_price": p.get("avg_entry_price"),
                 },
             )
 
@@ -429,7 +550,13 @@ class PositionMonitor:
                     market_tide_30m=entry_context.get("market_tide_30m"),
                     decision_id=entry_context.get("decision_id"),
                     option_symbol=entry_context.get("option_symbol"),
-                    expiry_date=entry_context.get("expiry_date"),
+                    # Fall back to the contract symbol's own encoded expiry.
+                    # The entry-context join returns a context WITHOUT
+                    # expiry_date on three paths (no matching decision, fetch
+                    # error, timeout), and a None here disarms the time-stop
+                    # entirely — the position then rides to expiry and any ITM
+                    # contract is auto-exercised into equity.
+                    expiry_date=entry_context.get("expiry_date") or _expiry_from_occ_symbol(symbol),
                 )
                 self.tracked_positions[symbol] = pos
                 # Initial upsert so the row exists for subsequent
@@ -712,12 +839,18 @@ class PositionMonitor:
         (see FOLLOWUPS.md #0).
         """
         from orion.config import system_settings
+        from orion.core.market_schedule import resolve_session_close
         from orion.execution.exit_fallback_rules import (
             evaluate_fallback_rules,
             resolve_exit_params,
         )
 
         exit_signals: list[tuple[TrackedPosition, ExitPrediction]] = []
+
+        # One calendar lookup per cycle, shared by every position: the 0DTE
+        # flatten deadline is min(configured cutoff, session close - buffer),
+        # so a 13:00 ET half day flattens before expiry instead of never.
+        session_close = resolve_session_close()
 
         for symbol, pos in self.tracked_positions.items():
             # Fallback rules first — they're cheap and deterministic.
@@ -729,6 +862,7 @@ class PositionMonitor:
                 fallback = evaluate_fallback_rules(
                     pos,
                     params=resolve_exit_params(pos.bucket, system_settings.exit_bucket_overrides),
+                    session_close=session_close,
                 )
             except Exception as exc:
                 logger.error(
@@ -816,19 +950,25 @@ class PositionMonitor:
     # account). Permanent abandonment stranded a +320% MU winner on 2026-06-05.
     _MAX_CONSECUTIVE_CLOSE_FAILURES = 5
     _CLOSE_ABANDON_COOLDOWN_SECONDS = 600.0
+    # An expiry flatten has a hard deadline — the session close — and the whole
+    # window between the flatten cutoff and that close is only 15 minutes. The
+    # standard 10-minute cooldown would eat almost all of it and let an ITM
+    # contract reach expiry, so a flatten waits a cycle or two, not ten minutes.
+    _FLATTEN_ABANDON_COOLDOWN_SECONDS = 60.0
 
     def _now(self) -> float:
         """Monotonic clock for cooldown math (patchable in tests)."""
         return time.monotonic()
 
-    def _close_attempts_exhausted(self, symbol: str) -> bool:
+    def _close_attempts_exhausted(self, symbol: str, *, expiry_deadline: bool = False) -> bool:
         count = self._consecutive_close_failures.get(symbol, 0)
         if count < self._MAX_CONSECUTIVE_CLOSE_FAILURES:
             return False
         # Abandoned — but give it another chance once the cooldown elapses so a
         # transient cause can clear instead of stranding the position forever.
+        cooldown = self._FLATTEN_ABANDON_COOLDOWN_SECONDS if expiry_deadline else self._CLOSE_ABANDON_COOLDOWN_SECONDS
         last = self._close_failure_ts.get(symbol)
-        if last is not None and (self._now() - last) >= self._CLOSE_ABANDON_COOLDOWN_SECONDS:
+        if last is not None and (self._now() - last) >= cooldown:
             self._consecutive_close_failures.pop(symbol, None)
             self._close_failure_ts.pop(symbol, None)
             logger.warning(
@@ -854,7 +994,9 @@ class PositionMonitor:
         if count == self._MAX_CONSECUTIVE_CLOSE_FAILURES:
             logger.critical(
                 f"Abandoning close for {symbol} after {count} consecutive failures — "
-                f"will retry after {int(self._CLOSE_ABANDON_COOLDOWN_SECONDS)}s; "
+                f"will retry after the abandon cooldown "
+                f"({int(self._CLOSE_ABANDON_COOLDOWN_SECONDS)}s, or "
+                f"{int(self._FLATTEN_ABANDON_COOLDOWN_SECONDS)}s for an expiry flatten); "
                 f"manual review recommended (position may be stuck/unclosable)",
                 extra={
                     "event": "close_abandoned",
@@ -888,6 +1030,7 @@ class PositionMonitor:
         Returns:
             List of execution results
         """
+        from orion.execution.exit_fallback_rules import racing_expiry
         from orion.ml.performance_tracker import log_exit_prediction, log_outcome
 
         results = []
@@ -934,8 +1077,12 @@ class PositionMonitor:
                     results.append(result)
                     continue
 
-                # Stop hammering a position that repeatedly fails to close.
-                if self._close_attempts_exhausted(pos.symbol):
+                # Stop hammering a position that repeatedly fails to close —
+                # except one expiring today, which runs out of session rather
+                # than out of attempts. Keyed off the position, not the winning
+                # rule: a post-cutoff 0DTE that exits on stop-loss or profit
+                # target is racing the same expiry as an explicit flatten.
+                if self._close_attempts_exhausted(pos.symbol, expiry_deadline=racing_expiry(pos)):
                     result["error"] = "close_abandoned_after_repeated_failures"
                     results.append(result)
                     continue
