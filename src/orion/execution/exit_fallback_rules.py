@@ -30,11 +30,19 @@ each rule.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 _ET = ZoneInfo("America/New_York")
+
+# The 0DTE flatten must leave runway for a marketable limit to fill before
+# the session ends: the monitor re-checks every 30s while a 0DTE is open and
+# the close escalates through repricing. 15 minutes mirrors the gap the fixed
+# 15:45 cutoff assumed against a 16:00 close — widening it would move the
+# normal-day cutoff earlier, so the retry policy adapts instead (see
+# PositionMonitor._close_attempts_exhausted).
+FLATTEN_CLOSE_BUFFER_MINUTES = 15
 
 
 @dataclass
@@ -219,44 +227,97 @@ class ProfitTargetRule:
         )
 
 
+def expires_today(position: Any, now_et: datetime | None = None) -> bool:
+    """True when the position's contract expires in today's ET session.
+
+    Reads the bucket label first, then `expiry_date` as defense in depth:
+    the label can be wrong (missing entry context, DB hiccup at reload)
+    and a contract that really expires today must still be treated as
+    one. Consumers use this both to flatten and to decide how long a
+    failing close may be left alone.
+    """
+    now_et = now_et or datetime.now(_ET)
+    if getattr(position, "bucket", None) == "0DTE":
+        return True
+    expiry = getattr(position, "expiry_date", None)
+    if expiry is None:
+        return False
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    # Expiry is stored midnight UTC and encodes the contract's CALENDAR
+    # date — converting it to ET would shift it to the prior evening and
+    # flatten a tomorrow-expiring position a day early. Compare the UTC
+    # calendar date to today-in-ET.
+    return bool(expiry.astimezone(UTC).date() <= now_et.date())
+
+
+def racing_expiry(position: Any, now_et: datetime | None = None) -> bool:
+    """`expires_today`, minus contracts whose expiry has already passed.
+
+    A row still tracked after its expiry date is stale, not a position
+    with a deadline ahead of it — closing it can only fail. Callers that
+    trade off retry pressure against the deadline use this; the flatten
+    rule itself keeps the looser test so a mislabeled position is still
+    caught. A missing expiry falls back to the bucket label, because the
+    positions most likely to reach expiry unexited are exactly the ones
+    whose entry context went missing.
+    """
+    now_et = now_et or datetime.now(_ET)
+    if not expires_today(position, now_et):
+        return False
+    expiry = getattr(position, "expiry_date", None)
+    if expiry is None:
+        return True
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    return bool(expiry.astimezone(UTC).date() == now_et.date())
+
+
 class ZeroDTEFlattenRule:
     """Hard-flatten 0DTE positions after a cutoff time (ET).
 
     A 0DTE held into the close is a coin-flip on pin risk plus guaranteed
-    theta wipeout; nothing about the entry thesis survives 15:45.
+    theta wipeout; nothing about the entry thesis survives 15:45. Worse,
+    an ITM contract left at expiry is auto-exercised into equity Orion
+    can neither see nor sell.
+
+    The effective cutoff is the EARLIER of `flatten_after_et` and
+    `session_close` minus the fill buffer, so a 13:00 ET half-day
+    flattens at 12:45 instead of waiting for a 15:45 that never comes.
+    `session_close` is supplied by the caller (see resolve_session_close)
+    to keep this rule pure and injectable; None leaves the fixed cutoff
+    in force.
     """
 
     rule_id = "zero_dte_flatten_v1"
 
-    def __init__(self, flatten_after_et: str | None) -> None:
+    def __init__(self, flatten_after_et: str | None, session_close: datetime | None = None) -> None:
         self.flatten_after_et = flatten_after_et
+        self.session_close = session_close
+
+    def _cutoff(self, now_et: datetime) -> datetime:
+        """Effective flatten deadline for the session `now_et` falls in."""
+        hour, minute = (int(part) for part in str(self.flatten_after_et).split(":"))
+        cutoff = now_et.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if self.session_close is None:
+            return cutoff
+        close = self.session_close
+        if close.tzinfo is None:
+            close = close.replace(tzinfo=UTC)
+        return min(cutoff, close.astimezone(_ET) - timedelta(minutes=FLATTEN_CLOSE_BUFFER_MINUTES))
 
     def should_exit(self, position: Any) -> ExitSignal | None:
         if not self.flatten_after_et:
             return None
         now_et = datetime.now(_ET)
-        # Defense in depth: the bucket label can be wrong (missing entry
-        # context, DB hiccup at reload) — a position whose contract actually
-        # expires today must still flatten, so check expiry_date directly too.
-        is_zero_dte = getattr(position, "bucket", None) == "0DTE"
-        if not is_zero_dte:
-            expiry = getattr(position, "expiry_date", None)
-            if expiry is not None:
-                if expiry.tzinfo is None:
-                    expiry = expiry.replace(tzinfo=UTC)
-                # Expiry is stored midnight UTC and encodes the contract's
-                # CALENDAR date — converting it to ET would shift it to the
-                # prior evening and flatten a tomorrow-expiring position a
-                # day early. Compare the UTC calendar date to today-in-ET.
-                is_zero_dte = expiry.astimezone(UTC).date() <= now_et.date()
-        if not is_zero_dte:
+        if not expires_today(position, now_et):
             return None
-        hour, minute = (int(part) for part in self.flatten_after_et.split(":"))
-        if (now_et.hour, now_et.minute) < (hour, minute):
+        cutoff = self._cutoff(now_et)
+        if now_et < cutoff:
             return None
         return ExitSignal(
             rule_id=self.rule_id,
-            reason=f"0DTE flatten: {now_et:%H:%M} ET >= {self.flatten_after_et} ET cutoff",
+            reason=f"0DTE flatten: {now_et:%H:%M} ET >= {cutoff:%H:%M} ET cutoff",
             urgency="IMMEDIATE",
         )
 
@@ -392,6 +453,7 @@ def evaluate_fallback_rules(
     position: Any,
     *,
     params: BucketExitParams,
+    session_close: datetime | None = None,
 ) -> ExitSignal | None:
     """Run all exit rules in priority order. Return first signal that fires.
 
@@ -399,12 +461,15 @@ def evaluate_fallback_rules(
     then stop-loss (hard risk limit), profit target (most informative
     signal), 0DTE flatten and expiry (hard deadlines), no-progress and
     max-hold (time stops), drawdown-from-peak (trailing stop) last.
+
+    `session_close` shortens the 0DTE flatten deadline on early-close
+    sessions; see resolve_session_close.
     """
     for rule in (
         DisasterValveRule(params.disaster_pct),
         StopLossRule(params.stop_loss_pct),
         ProfitTargetRule(params.profit_target_pct),
-        ZeroDTEFlattenRule(params.flatten_after_et),
+        ZeroDTEFlattenRule(params.flatten_after_et, session_close),
         TimeToExpiryRule(params.min_dte),
         NoProgressRule(params.no_progress_minutes, params.no_progress_band_pct),
         MaxHoldRule(params.max_hold_hours),

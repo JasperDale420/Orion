@@ -8,6 +8,54 @@ from orion.shared.logger import setup_struct_logger
 logger = setup_struct_logger("orion.core.schedule")
 
 
+# Earliest close NYSE ever schedules — half days (day after Thanksgiving,
+# Christmas Eve) end at 13:00 ET. Used only when the calendar can't be read.
+_EARLIEST_SESSION_CLOSE_ET = (13, 0)
+
+
+def resolve_session_close(now: datetime | None = None) -> datetime | None:
+    """Close of the session in progress, for time-of-day trading deadlines.
+
+    Returns None when no session is in progress — not a failure; callers
+    keep their fixed fallback cutoff.
+
+    When the calendar is unavailable the real close is UNKNOWN, so this
+    returns the earliest close NYSE ever schedules (13:00 ET) rather than
+    letting callers assume 16:00. That keeps 0DTE deadlines conservative
+    instead of silently disarming them. NOTE: a dead calendar also blocks
+    order submission (`is_market_open_for_options` raises on the same
+    condition), so this bounds the deadline but cannot on its own get a
+    position flattened — hence the CRITICAL log, which needs an operator.
+
+    Never raises: callers use it on paths where a throw would starve
+    unrelated work.
+    """
+    now = now or datetime.now(UTC)
+    try:
+        close = MarketSchedule().get_todays_close(now)
+        if close is not None and close.tzinfo is None:
+            close = close.replace(tzinfo=UTC)
+        return close
+    except Exception as exc:
+        hour, minute = _EARLIEST_SESSION_CLOSE_ET
+        fallback = now.astimezone(ZoneInfo("America/New_York")).replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        logger.critical(
+            f"Market calendar unavailable — assuming earliest possible close "
+            f"{fallback:%H:%M} ET for trading deadlines: {exc}. Order submission is "
+            f"also blocked while the calendar is down; open 0DTE positions need a "
+            f"manual flatten before expiry.",
+            extra={
+                "event": "session_close_unavailable",
+                "event_type": "SESSION_CLOSE_CALENDAR_UNAVAILABLE",
+                "error": str(exc),
+                "assumed_close_et": fallback.isoformat(),
+            },
+        )
+        return fallback
+
+
 class MarketSchedule:
     _instance = None
 

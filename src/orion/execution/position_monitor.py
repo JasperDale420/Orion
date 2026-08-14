@@ -839,12 +839,18 @@ class PositionMonitor:
         (see FOLLOWUPS.md #0).
         """
         from orion.config import system_settings
+        from orion.core.market_schedule import resolve_session_close
         from orion.execution.exit_fallback_rules import (
             evaluate_fallback_rules,
             resolve_exit_params,
         )
 
         exit_signals: list[tuple[TrackedPosition, ExitPrediction]] = []
+
+        # One calendar lookup per cycle, shared by every position: the 0DTE
+        # flatten deadline is min(configured cutoff, session close - buffer),
+        # so a 13:00 ET half day flattens before expiry instead of never.
+        session_close = resolve_session_close()
 
         for symbol, pos in self.tracked_positions.items():
             # Fallback rules first — they're cheap and deterministic.
@@ -856,6 +862,7 @@ class PositionMonitor:
                 fallback = evaluate_fallback_rules(
                     pos,
                     params=resolve_exit_params(pos.bucket, system_settings.exit_bucket_overrides),
+                    session_close=session_close,
                 )
             except Exception as exc:
                 logger.error(
@@ -943,19 +950,25 @@ class PositionMonitor:
     # account). Permanent abandonment stranded a +320% MU winner on 2026-06-05.
     _MAX_CONSECUTIVE_CLOSE_FAILURES = 5
     _CLOSE_ABANDON_COOLDOWN_SECONDS = 600.0
+    # An expiry flatten has a hard deadline — the session close — and the whole
+    # window between the flatten cutoff and that close is only 15 minutes. The
+    # standard 10-minute cooldown would eat almost all of it and let an ITM
+    # contract reach expiry, so a flatten waits a cycle or two, not ten minutes.
+    _FLATTEN_ABANDON_COOLDOWN_SECONDS = 60.0
 
     def _now(self) -> float:
         """Monotonic clock for cooldown math (patchable in tests)."""
         return time.monotonic()
 
-    def _close_attempts_exhausted(self, symbol: str) -> bool:
+    def _close_attempts_exhausted(self, symbol: str, *, expiry_deadline: bool = False) -> bool:
         count = self._consecutive_close_failures.get(symbol, 0)
         if count < self._MAX_CONSECUTIVE_CLOSE_FAILURES:
             return False
         # Abandoned — but give it another chance once the cooldown elapses so a
         # transient cause can clear instead of stranding the position forever.
+        cooldown = self._FLATTEN_ABANDON_COOLDOWN_SECONDS if expiry_deadline else self._CLOSE_ABANDON_COOLDOWN_SECONDS
         last = self._close_failure_ts.get(symbol)
-        if last is not None and (self._now() - last) >= self._CLOSE_ABANDON_COOLDOWN_SECONDS:
+        if last is not None and (self._now() - last) >= cooldown:
             self._consecutive_close_failures.pop(symbol, None)
             self._close_failure_ts.pop(symbol, None)
             logger.warning(
@@ -981,7 +994,9 @@ class PositionMonitor:
         if count == self._MAX_CONSECUTIVE_CLOSE_FAILURES:
             logger.critical(
                 f"Abandoning close for {symbol} after {count} consecutive failures — "
-                f"will retry after {int(self._CLOSE_ABANDON_COOLDOWN_SECONDS)}s; "
+                f"will retry after the abandon cooldown "
+                f"({int(self._CLOSE_ABANDON_COOLDOWN_SECONDS)}s, or "
+                f"{int(self._FLATTEN_ABANDON_COOLDOWN_SECONDS)}s for an expiry flatten); "
                 f"manual review recommended (position may be stuck/unclosable)",
                 extra={
                     "event": "close_abandoned",
@@ -1015,6 +1030,7 @@ class PositionMonitor:
         Returns:
             List of execution results
         """
+        from orion.execution.exit_fallback_rules import racing_expiry
         from orion.ml.performance_tracker import log_exit_prediction, log_outcome
 
         results = []
@@ -1061,8 +1077,12 @@ class PositionMonitor:
                     results.append(result)
                     continue
 
-                # Stop hammering a position that repeatedly fails to close.
-                if self._close_attempts_exhausted(pos.symbol):
+                # Stop hammering a position that repeatedly fails to close —
+                # except one expiring today, which runs out of session rather
+                # than out of attempts. Keyed off the position, not the winning
+                # rule: a post-cutoff 0DTE that exits on stop-loss or profit
+                # target is racing the same expiry as an explicit flatten.
+                if self._close_attempts_exhausted(pos.symbol, expiry_deadline=racing_expiry(pos)):
                     result["error"] = "close_abandoned_after_repeated_failures"
                     results.append(result)
                     continue

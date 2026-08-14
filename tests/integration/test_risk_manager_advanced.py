@@ -272,3 +272,41 @@ class TestZeroDteWinddown:
         multiplier = rm.get_zero_dte_size_multiplier(dte=0, timestamp=timestamp)
 
         assert multiplier == 0.0
+
+    # 2026-11-27 is the day after Thanksgiving: NYSE closes at 13:00 ET. The
+    # wind-down windows are measured from the REAL close, so they engage three
+    # hours earlier than on a normal day. Read from the bundled XNYS calendar,
+    # no mocks — a fixed 16:00 assumption fails both of these.
+
+    def test_early_close_blocks_entry_inside_cutoff(self):
+        """12:00 ET on a 13:00 close is 60 min out — inside the hard cutoff."""
+        settings = RiskSettings(
+            zero_dte_cutoff_minutes=60,
+            zero_dte_reduce_size_after_minutes=120,
+            enable_zero_dte_winddown=True,
+        )
+        rm = RiskManager(config=settings)
+
+        timestamp = datetime(2026, 11, 27, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+        allowed, reason = rm.check_zero_dte_winddown(dte=0, timestamp=timestamp)
+
+        assert allowed is False
+        assert "cutoff" in reason.lower()
+        assert rm.get_zero_dte_size_multiplier(dte=0, timestamp=timestamp) == 0.0
+
+    def test_early_close_reduces_size_before_cutoff(self):
+        """11:00 ET on a 13:00 close is 120 min out — the reduce-size window."""
+        settings = RiskSettings(
+            zero_dte_cutoff_minutes=60,
+            zero_dte_reduce_size_after_minutes=120,
+            zero_dte_reduced_size_pct=0.50,
+            enable_zero_dte_winddown=True,
+        )
+        rm = RiskManager(config=settings)
+
+        timestamp = datetime(2026, 11, 27, 11, 0, tzinfo=ZoneInfo("America/New_York"))
+        allowed, reason = rm.check_zero_dte_winddown(dte=0, timestamp=timestamp)
+
+        assert allowed is True
+        assert "Reduce size" in reason
+        assert rm.get_zero_dte_size_multiplier(dte=0, timestamp=timestamp) == 0.50

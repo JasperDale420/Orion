@@ -226,6 +226,94 @@ def test_zero_dte_flatten_not_a_day_early_for_midnight_utc_expiry():
         assert rule.should_exit(pos) is None
 
 
+# --- ZeroDTEFlattenRule: early-close sessions -------------------------------
+
+
+def _close_et(hour: int, minute: int) -> datetime:
+    """A session close at the given ET wall-clock time on the fixture's date."""
+    from zoneinfo import ZoneInfo
+
+    return datetime(2026, 7, 1, hour, minute, tzinfo=ZoneInfo("America/New_York"))
+
+
+def test_zero_dte_flatten_fires_before_early_close():
+    """REGRESSION: a 13:00 ET early close never reaches 15:45, so the fixed
+    cutoff never fired and an ITM 0DTE was auto-exercised at expiry."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45", session_close=_close_et(13, 0))
+    pos = _make_position(bucket="0DTE")
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(12, 46).astimezone(tz or UTC)
+        sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.urgency == "IMMEDIATE"
+    assert sig.rule_id == "zero_dte_flatten_v1"
+
+
+def test_zero_dte_flatten_quiet_before_early_close_cutoff():
+    """The early-close cutoff is 12:45 (13:00 minus the fill buffer) — not earlier."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45", session_close=_close_et(13, 0))
+    pos = _make_position(bucket="0DTE")
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(12, 30).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is None
+
+
+def test_zero_dte_flatten_early_close_fires_for_mislabeled_bucket():
+    """Defence in depth still applies on an early close: a today-expiring
+    contract mislabeled SWING must flatten before the 13:00 close too."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45", session_close=_close_et(13, 0))
+    pos = _make_position(bucket="SWING", expiry_date=_at_et(16, 0))
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(12, 50).astimezone(tz or UTC)
+        sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.rule_id == "zero_dte_flatten_v1"
+
+
+def test_zero_dte_flatten_normal_close_keeps_configured_cutoff():
+    """A 16:00 close leaves the configured 15:45 in force — unchanged behaviour."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45", session_close=_close_et(16, 0))
+    pos = _make_position(bucket="0DTE")
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 44).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is None
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 46).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is not None
+
+
+def test_zero_dte_flatten_without_session_close_uses_configured_cutoff():
+    """No session in progress (pre-open / after-hours): fixed cutoff applies."""
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45", session_close=None)
+    pos = _make_position(bucket="0DTE")
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(15, 50).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is not None
+
+
+def test_zero_dte_flatten_accepts_naive_session_close_as_utc():
+    """A naive session close is read as UTC — same convention as expiry_date."""
+    naive_close_utc = _close_et(13, 0).astimezone(UTC).replace(tzinfo=None)
+    rule = ZeroDTEFlattenRule(flatten_after_et="15:45", session_close=naive_close_utc)
+    pos = _make_position(bucket="0DTE")
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(12, 46).astimezone(tz or UTC)
+        assert rule.should_exit(pos) is not None
+
+
+def test_evaluate_fallback_rules_threads_session_close_to_flatten_rule():
+    """Composition must pass the session close through, or the fix is inert."""
+    pos = _make_position(bucket="0DTE", return_pct=0.10)
+    with patch("orion.execution.exit_fallback_rules.datetime") as mock_dt:
+        mock_dt.now.side_effect = lambda tz=None: _at_et(12, 50).astimezone(tz or UTC)
+        sig = evaluate_fallback_rules(
+            pos,
+            params=resolve_exit_params("0DTE"),
+            session_close=_close_et(13, 0),
+        )
+    assert sig is not None
+    assert sig.rule_id == "zero_dte_flatten_v1"
+
+
 # --- NoProgressRule ---------------------------------------------------------
 
 
