@@ -31,31 +31,36 @@ last_updated_utc: <timestamp>
 No row at all also means nominal — the breaker has never tripped.
 
 Note the DB is the docker TimescaleDB on port **5440**, not the homebrew Postgres
-on 5432. Set it explicitly from a plain shell:
-
-```bash
-DB_URL=postgresql://orion@localhost:5440/orion_db uv run python scripts/reset_circuit_breaker.py --dry-run
-```
+on 5432, and native services connect as `orion` with a password. Take the exact
+URL from `scripts/run_ingestion_native.sh` (it pins `DB_URL`); a plain
+`postgresql://orion@localhost:5440/...` fails password auth.
 
 ## Close Circuit Breaker (Resume Operations)
 
 Only after confirming the condition that tripped it has cleared.
 
-### Via script (preferred)
+### Via Python (preferred — this is the path that works)
 
 ```bash
-DB_URL=postgresql://orion@localhost:5440/orion_db uv run python scripts/reset_circuit_breaker.py
+DB_URL="<the DB_URL pinned in scripts/run_ingestion_native.sh>" uv run python -c "
+import asyncio, os
+from orion.storage import db
+async def main():
+    db.configure_db(os.environ['DB_URL'], echo=False)
+    from orion.core.circuit_breaker import CircuitBreaker
+    print(await CircuitBreaker().get_state())
+    await CircuitBreaker().close()
+    print(await CircuitBreaker().get_state())
+asyncio.run(main())"
 ```
 
-Pass `--dry-run` first to print the current state and cause without changing it.
+Drop the `close()` line to read the state without changing it.
 
-### Via Python
+### Not `scripts/reset_circuit_breaker.py`
 
-```python
-from orion.core.circuit_breaker import CircuitBreaker
-
-await CircuitBreaker().close()
-```
+That script imports `psycopg2`, which is not a declared dependency and is not
+installed in the venv, so it fails at import with `ModuleNotFoundError`. Use the
+Python path above until the script is fixed or removed.
 
 ### Via admin API
 
