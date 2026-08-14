@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+launchd agent for Orion log rotation.
+
+Why this exists: Orion's structured logs (orion.log, orion_errors.log,
+orion_YYYY-MM-DD.log) are rotated by empire_core's RotatingFileHandler, but two
+other classes of log are not rotated by anything:
+
+  - wrapper redirects, e.g. run_execution_native.sh ends in
+    `exec python -m orion.main_execution >> logs/execution_native.log`
+  - launchd redirects, i.e. StandardOutPath / StandardErrorPath
+
+Both are plain O_APPEND handles held for the life of the process, so they grow
+without bound. On 2026-08-13 execution_native.log had reached 6.5 GB and the
+logs dir 20 GB (a gateway-error storm accounted for most of it).
+
+The script truncates in place rather than renaming — a running service holds an
+open fd, and renaming would leave it writing to the renamed inode. It is
+therefore safe to run against live services and needs no restart.
+
+Schedule: 03:30 local, daily. Deliberately outside the 06:30-13:00 PT market
+session so a multi-GB gzip never competes with ingestion for CPU.
+
+Install (create the log dir FIRST — launchd opens StandardOutPath /
+StandardErrorPath below before the script ever runs, so a missing logs/ dir
+would stop the job launching at all, silently):
+    mkdir -p /Users/jacobmcmillan/Empire/Orion/logs
+    cp scripts/launchd/com.empire.orion.log-rotation.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.log-rotation.plist
+
+Status / run once by hand:
+    launchctl print gui/$(id -u)/com.empire.orion.log-rotation
+    launchctl kickstart -k gui/$(id -u)/com.empire.orion.log-rotation
+
+Verify without changing anything:
+    scripts/rotate_native_logs.sh --dry-run
+    scripts/rotate_native_logs.sh --self-check
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.empire.orion.log-rotation</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/jacobmcmillan/Empire/Orion/scripts/rotate_native_logs.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/jacobmcmillan/Empire/Orion</string>
+
+    <!-- Daily at 03:30 local: well clear of the cash session. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <!-- A rotation pass is a one-shot; never keep it alive. -->
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Rotation output is one JSON line per action. These two files are
+         themselves in the allowlist, so the job trims its own logs. -->
+    <key>StandardOutPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/log_rotation.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jacobmcmillan/Empire/Orion/logs/log_rotation.stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>/Users/jacobmcmillan</string>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
