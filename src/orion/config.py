@@ -452,7 +452,6 @@ class SystemSettings(BaseSettings):
     )
 
     # Circuit breaker
-    reset_circuit_breaker_on_start: bool = Field(default=False, validation_alias="ORION_RESET_CIRCUIT_BREAKER_ON_START")
     trip_circuit_breaker_on_lag: bool = Field(default=False, validation_alias="ORION_TRIP_CIRCUIT_BREAKER_ON_LAG")
     # Master kill switches for both breakers. When false, the breaker still
     # records events (so logs show what would have tripped) but trading is
