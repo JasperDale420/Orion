@@ -439,6 +439,33 @@ async def test_options_cancels_only_orion_resting_orders(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
+async def test_pending_cleanup_failure_is_logged_without_blocking_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local bookkeeping failure must be visible but cannot trap a position."""
+    import orion.execution.execution_engine as ee_mod
+
+    _patch_persist(monkeypatch)
+    logged = Mock()
+    monkeypatch.setattr(ee_mod.logger, "error", logged)
+
+    engine = _make_engine(market_schedule_returns_options_open=True)
+    engine.risk_manager.remove_pending_order = AsyncMock(side_effect=RuntimeError("database unavailable"))
+    client = _make_client(
+        broker_qty="2",
+        open_orders=[{"id": "ord-orion", "symbol": "MU260612P00790000", "client_order_id": "orion_resting"}],
+        limit_result={"id": "order-opt", "status": "accepted"},
+    )
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="MU260612P00790000", qty=2.0, exit_signal=_exit_signal(), direction="LONG", current_price=10.0
+    )
+
+    assert closed is True
+    assert any(call.args and call.args[0] == "resting_order_pending_cleanup_failed" for call in logged.call_args_list)
+
+
+@pytest.mark.asyncio
 async def test_close_failure_persists_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
     """When BOTH the attributed limit and the native escalation fail, a REJECTED
     orders row is persisted so the failure is auditable (RCA 2026-06-05)."""

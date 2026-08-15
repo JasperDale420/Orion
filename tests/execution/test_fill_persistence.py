@@ -1,9 +1,17 @@
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
+from tenacity import RetryError
 
-from orion.execution.persistence import _coerce_timestamp, persist_fill_record
+from orion.execution import persistence
+from orion.execution.persistence import (
+    _coerce_timestamp,
+    is_fill_processed,
+    mark_fill_processed,
+    persist_fill_record,
+)
 from orion.storage.db import async_session_factory
 from orion.storage.models_execution import FillRecord
 
@@ -112,3 +120,29 @@ async def test_persist_fill_record_with_string_timestamp() -> None:
     assert row.filled_at_utc.year == 2026
     assert row.filled_at_utc.month == 5
     assert row.filled_at_utc.day == 14
+
+
+@pytest.mark.asyncio
+async def test_fill_idempotency_lookup_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(persistence, "db_query", AsyncMock(side_effect=RuntimeError("database unavailable")))
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        await is_fill_processed("broker-1:1")
+
+
+@pytest.mark.asyncio
+async def test_fill_marker_write_failure_is_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(persistence, "db_write", AsyncMock(side_effect=RuntimeError("database unavailable")))
+
+    with pytest.raises(RetryError) as caught:
+        await mark_fill_processed("broker-1:1")
+    assert isinstance(caught.value.last_attempt.exception(), RuntimeError)
+
+
+@pytest.mark.asyncio
+async def test_fill_record_write_failure_is_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(persistence, "db_write", AsyncMock(side_effect=RuntimeError("database unavailable")))
+
+    with pytest.raises(RetryError) as caught:
+        await persist_fill_record({"id": "broker-1", "symbol": "SPY", "filled_qty": 1, "filled_avg_price": 2})
+    assert isinstance(caught.value.last_attempt.exception(), RuntimeError)

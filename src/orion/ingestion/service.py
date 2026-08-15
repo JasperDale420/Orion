@@ -929,7 +929,7 @@ class IngestionService:
                 str(payload.get(k, ""))
                 for k in ("ticker", "ts_event", "executed_at", "premium", "put_call", "strike", "expiry", "volume")
             )
-            event_id = f"uwflow_{hashlib.sha1(basis.encode()).hexdigest()}"
+            event_id = f"uwflow_{hashlib.sha1(basis.encode(), usedforsecurity=False).hexdigest()}"
 
         # Extract event timestamp before it was converted to ISO string
         ts_event_raw = raw.get("ts_event")

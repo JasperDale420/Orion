@@ -2262,12 +2262,20 @@ class ExecutionEngine:
                 safe = False
                 continue
             # Cancel accepted → drop it from risk pending exposure.
-            remove = getattr(self.risk_manager, "remove_pending_order", None)
-            if remove is not None:
-                try:
-                    await remove(coid)
-                except Exception:
-                    pass
+            try:
+                await self._remove_pending_order_compat(coid)
+            except Exception as exc:
+                # The broker cancel is already accepted, so never trap a
+                # risk-reducing close on local bookkeeping. Keep the drift loud
+                # so the next reconciliation can repair it.
+                logger.error(
+                    "resting_order_pending_cleanup_failed",
+                    ticker=ticker,
+                    order_id=str(order_id),
+                    client_order_id=coid,
+                    error=str(exc),
+                    exc_info=True,
+                )
             logger.info(
                 f"Cancelled resting Orion order {order_id} on {ticker} before close",
                 extra={"event_type": "EXIT_CANCEL_RESTING", "ticker": ticker, "order_id": str(order_id)},
