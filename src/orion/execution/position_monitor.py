@@ -1087,6 +1087,31 @@ class PositionMonitor:
                     results.append(result)
                     continue
 
+                # A shut options session is a DEFERRAL, not a failed close — so
+                # don't attempt, and don't spend an attempt from the budget.
+                # Counting these burns the whole budget overnight (five cycles
+                # is under half a minute) and abandons the position into a
+                # 10-minute cooldown exactly as the next session opens, which is
+                # when the exit finally becomes possible. Checked per position
+                # and immediately before the attempt: a window read taken after
+                # the fact cannot prove WHY a close returned False — an
+                # unreachable Gateway, an unconfirmed cancel and an ambiguous
+                # submit all return False too, and excusing those would let a
+                # genuinely stuck position retry forever (adversarial review).
+                # Classified by the same predicate the engine uses, on the same
+                # `pos.symbol` it is handed: an entry-context timeout leaves an
+                # OCC position with `option_symbol=None`, and keying off that
+                # field would miss exactly the positions with the weakest
+                # provenance (adversarial review).
+                if (
+                    _is_occ_option_symbol(pos.symbol)
+                    and self._execution_engine is not None
+                    and not await self._execution_engine.options_close_window_open()
+                ):
+                    result["error"] = "options_session_closed"
+                    results.append(result)
+                    continue
+
                 # Mark symbol as closing before submitting order
                 if self._position_manager:
                     if not self._position_manager.mark_closing(pos.symbol):

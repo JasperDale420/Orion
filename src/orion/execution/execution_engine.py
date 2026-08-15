@@ -197,6 +197,24 @@ def _parse_already_terminal_state(result: dict[str, Any]) -> str | None:
 # as a transient reject and re-attempted across sweeps and restarts).
 _CANCEL_LEGACY_UNOWNED_MARKER = "gw-e4404"
 
+# Degraded close gate (calendar unavailable). How long a CLOSED broker-clock
+# verdict is reused. Closed is the state the every-~5s retry across every open
+# position sits in, so caching it is what keeps the fallback off a Gateway that
+# has answered a 429 storm before. An OPEN verdict is never cached — see
+# `_broker_market_open`.
+_CLOCK_CLOSED_CACHE_S = 10.0
+
+# How long an OPEN verdict may be reused, and only by the advisory gates: the
+# monitor's pre-check and the engine's entry gate land milliseconds apart on the
+# same close attempt, so without this each attempt re-reads the clock several
+# times over — and a 429 storm during an outage delays every exit at exactly the
+# wrong moment. The immediately-before-submit check always re-reads, so this
+# never widens the one-round-trip staleness that check already cannot avoid.
+_CLOCK_OPEN_REUSE_S = 1.0
+
+# How often the operator is re-alerted while exits run without a calendar.
+_CALENDAR_ALERT_INTERVAL_S = 300.0
+
 
 def _is_legacy_unowned_cancel_rejection(result: dict[str, Any]) -> bool:
     """True ONLY when a cancel was rejected 404 GW-E4404 — a legacy pre-2026-05-20
@@ -488,6 +506,14 @@ class ExecutionEngine:
     _CLOSE_GATEWAY_RETRY_ATTEMPTS: int = 3
     _CLOSE_GATEWAY_RETRY_BACKOFF_SECONDS: float = 1.0
 
+    # Degraded close gate state: monotonic deadline through which the broker
+    # clock is known CLOSED, and the last operator alert. Class-level defaults
+    # so an engine built without __init__ (tests, and the close path's lazy
+    # wiring) still works.
+    _clock_closed_until: float | None = None
+    _clock_open_until: float | None = None
+    _calendar_alert_ts: float = float("-inf")
+
     async def _check_gateway_available(self, force: bool = False) -> bool:
         """Check if Data Gateway is reachable. Caches result for 60s unless
         `force` is set (the critical close path bypasses a possibly-stale
@@ -539,6 +565,105 @@ class ExecutionEngine:
                 )
                 await asyncio.sleep(self._CLOSE_GATEWAY_RETRY_BACKOFF_SECONDS)
         return False
+
+    async def options_close_window_open(self, *, require_fresh: bool = False) -> bool:
+        """RTH gate for the reduce-only options close. Never raises.
+
+        Normally the exchange calendar. That gate raises when the calendar
+        failed to load, and `MarketSchedule` is a process-lifetime singleton, so
+        the failure is permanent: every option exit was blocked until the
+        process was restarted, and an ITM contract rode to expiry to be
+        auto-exercised into equity Orion can neither see nor sell (2a21775e).
+
+        The fallback asks the BROKER's clock — the same authority that will
+        accept or reject the order, and the only one here that knows about
+        holidays and early closes. A weekday 9:30-16:00 ET wall clock cannot be
+        used: on a 13:00 ET half day it would submit at 14:00, and Alpaca QUEUES
+        a day order placed after the close rather than rejecting it, so the
+        close path would record an `accepted` order as a completed exit while it
+        actually rested until the next session — the 0DTE would still expire
+        unexited. That is the failure this whole path exists to prevent.
+
+        Fails closed when the clock cannot be read: a delayed exit is worse than
+        a timely one, but a blind submit is worse than both.
+
+        CLOSES ONLY. Entries keep using the strict calendar gate — a dead
+        calendar must never admit new risk, only shed it.
+        """
+        try:
+            return bool(self._market_schedule.is_market_open_for_options())
+        except Exception as exc:
+            return await self._broker_market_open(exc, require_fresh=require_fresh)
+
+    async def _options_close_window_still_open(self, ticker: str) -> bool:
+        """Re-check the window immediately before an options submit.
+
+        The gate at the top of `close_position` is separated from the actual
+        submit by several awaits — cancelling resting orders, a fresh chain
+        quote, a post-rejection position re-check — any of which can cross the
+        session close. Alpaca queues a day order placed after the close instead
+        of rejecting it, and both submit paths record a non-error response as a
+        completed exit, so a submit that lands past the close would drop a
+        still-open position from tracking.
+
+        With a healthy calendar this is a pure local computation; only the
+        degraded path pays for a clock read, and that read is always fresh —
+        the whole point of this check is that time has passed.
+        """
+        if await self.options_close_window_open(require_fresh=True):
+            return True
+        logger.warning(
+            f"Aborting options close for {ticker}: the session closed between the gate and the submit",
+            extra={"event_type": "EXIT_SKIPPED_MARKET_CLOSED_MIDFLIGHT", "ticker": ticker},
+        )
+        return False
+
+    async def _broker_market_open(self, calendar_exc: Exception, *, require_fresh: bool) -> bool:
+        """Broker-clock read. Only reached while the calendar is down.
+
+        A CLOSED verdict is cached for seconds — that is the state the
+        every-~5s retry across every open position sits in, so caching it is
+        what keeps this off a Gateway that has answered a 429 storm before,
+        and a stale one only ever delays an exit.
+
+        An OPEN verdict is reusable only for a moment, and never by
+        ``require_fresh`` callers: it goes stale across the session close, and
+        a submit landing after the close is queued rather than rejected. The
+        short reuse exists only to collapse the back-to-back advisory reads
+        within a single close attempt.
+        """
+        now = time.monotonic()
+        if self._clock_closed_until is not None and now < self._clock_closed_until:
+            return False
+        if not require_fresh and self._clock_open_until is not None and now < self._clock_open_until:
+            return True
+
+        try:
+            clock = await self._get_gateway_client().get_clock()
+        except Exception as exc:
+            clock = {"error": str(exc)}
+
+        # Anything that is not an unambiguous `is_open: True` from a well-formed
+        # payload counts as closed — a malformed or errored clock must not
+        # authorize a submit.
+        is_open = isinstance(clock, dict) and "error" not in clock and clock.get("is_open") is True
+        self._clock_closed_until = None if is_open else now + _CLOCK_CLOSED_CACHE_S
+        self._clock_open_until = now + _CLOCK_OPEN_REUSE_S if is_open else None
+
+        if now - self._calendar_alert_ts >= _CALENDAR_ALERT_INTERVAL_S:
+            self._calendar_alert_ts = now
+            logger.critical(
+                f"Exchange calendar unavailable ({calendar_exc}) — option CLOSES are "
+                f"gated on the broker clock instead (market currently "
+                f"{'OPEN' if is_open else 'CLOSED'}). New entries stay blocked. Restart "
+                f"the process to reload the calendar and verify open positions are exiting.",
+                extra={
+                    "event_type": "OPTIONS_CLOSE_GATE_DEGRADED",
+                    "error": str(calendar_exc),
+                    "broker_market_open": is_open,
+                },
+            )
+        return is_open
 
     async def _live_position_qty(self, ticker: str) -> float | None:
         """Signed live broker qty for `ticker`: 0.0 if flat, None if it could
@@ -1961,7 +2086,7 @@ class ExecutionEngine:
         is_option = is_occ_option_symbol(ticker)
 
         # ── Options outside RTH: skip submission ─────────────────
-        if is_option and not self._market_schedule.is_market_open_for_options():
+        if is_option and not await self.options_close_window_open():
             # DEBUG level so the every-5-second retry across ~50
             # positions doesn't flood WARN logs while market is closed.
             # Operator can still see the gating decision via
@@ -2041,6 +2166,8 @@ class ExecutionEngine:
 
             # 1) Primary: orion-attributed marketable LIMIT (keeps the fill
             #    orion-attributed → PnL / daily-loss / kill-switch accounting).
+            if not await self._options_close_window_still_open(ticker):
+                return False
             client_order_id = mint_orion_order_id()
             result, client_order_id = await self._submit_close_limit(
                 client=client,
@@ -2692,7 +2819,15 @@ class ExecutionEngine:
         vanished position (404 / POSITION_NOT_FOUND / 40410000) counts as
         already-closed (do NOT submit an opposing order — that could open a
         naked short).
+
+        Options-only (every caller is in the options branch of
+        ``close_position``), so the RTH window is re-checked here too: this is
+        reached after a quote lookup and possibly a position re-check, and a
+        native close queued after the session close would be recorded as a
+        completed exit.
         """
+        if not await self._options_close_window_still_open(ticker):
+            return False
         client_order_id = mint_orion_order_id()
         native = await client.close_position(ticker, qty=abs_qty)
         native_err = str(native.get("detail") or native.get("error") or "")

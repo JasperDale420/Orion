@@ -39,6 +39,15 @@ def _pred():
     return ExitPrediction(should_exit=True, confidence=0.9, reasoning="expiry")
 
 
+def _engine(*, close_returns=False, options_window_open=True):
+    """Engine whose closes fail during an OPEN options session — so the failures
+    below are genuine close failures, not market-closed deferrals."""
+    engine = MagicMock()
+    engine.close_position = AsyncMock(return_value=close_returns)
+    engine.options_close_window_open = AsyncMock(return_value=options_window_open)
+    return engine
+
+
 async def _run(monitor, engine, n):
     connector = MagicMock()
     with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
@@ -97,8 +106,7 @@ def test_abandoned_symbol_retries_after_cooldown(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_execute_exits_abandons_after_repeated_failures():
-    engine = MagicMock()
-    engine.close_position = AsyncMock(return_value=False)  # always fails
+    engine = _engine()  # closes always fail, session open
     monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
 
     await _run(monitor, engine, monitor._MAX_CONSECUTIVE_CLOSE_FAILURES)
@@ -111,9 +119,81 @@ async def test_execute_exits_abandons_after_repeated_failures():
 
 
 @pytest.mark.asyncio
+async def test_market_closed_deferrals_do_not_exhaust_the_attempt_budget():
+    """A shut options session is a DEFERRAL, not a failed close.
+
+    Counting these burns the whole budget overnight — five cycles is under half
+    a minute — and abandons the position into a 10-minute cooldown exactly as
+    the next session opens, which is when the exit finally becomes possible
+    (adversarial review)."""
+    engine = _engine(options_window_open=False)
+    monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
+
+    results = await _run(monitor, engine, monitor._MAX_CONSECUTIVE_CLOSE_FAILURES * 3)
+
+    assert results[0]["error"] == "options_session_closed"
+    assert monitor._close_attempts_exhausted("SMH260605P00550000") is False
+    assert "SMH260605P00550000" not in monitor._consecutive_close_failures
+    engine.close_position.assert_not_awaited()  # nothing to submit into a shut session
+
+
+@pytest.mark.asyncio
+async def test_deferral_covers_an_occ_position_with_no_entry_context():
+    """The deferral is keyed off the OCC symbol the engine is actually handed,
+    not off `option_symbol` — an entry-context timeout leaves an option position
+    with `option_symbol=None`, and keying off that field would spend the budget
+    on exactly the positions with the weakest provenance (adversarial review)."""
+    engine = _engine(options_window_open=False)
+    monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
+    pos = _pos()
+    pos.option_symbol = None  # no entry context; pos.symbol is still the contract
+
+    with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
+        with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
+            for _ in range(monitor._MAX_CONSECUTIVE_CLOSE_FAILURES * 2):
+                await monitor.execute_exits(MagicMock(), [(pos, _pred())], dry_run=False)
+
+    assert pos.symbol not in monitor._consecutive_close_failures
+    engine.close_position.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bell_crossing_mid_batch_defers_only_the_closed_leg():
+    """The window is read per position, immediately before that position's
+    attempt — never once for the batch. A batch has several awaits per close, so
+    it can straddle the bell: the leg attempted while open owns its failure, and
+    the leg that arrives after the bell must not be charged for it."""
+    engine = _engine()
+    engine.options_close_window_open = AsyncMock(side_effect=[True, False])
+    monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
+    before, after = _pos("AAPL260605C00200000"), _pos("MSFT260605C00400000")
+
+    with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
+        with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
+            await monitor.execute_exits(MagicMock(), [(before, _pred()), (after, _pred())], dry_run=False)
+
+    assert monitor._consecutive_close_failures.get(before.symbol) == 1  # attempted, failed
+    assert after.symbol not in monitor._consecutive_close_failures  # deferred, not charged
+    engine.close_position.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_genuine_close_failure_still_counts_when_the_session_is_open():
+    """The deferral check must not become a blanket excuse: a close that fails
+    for any other reason — unreachable Gateway, unconfirmed cancel, ambiguous
+    submit — all of which also return False, must still be charged, or a
+    genuinely stuck position would retry forever (adversarial review)."""
+    engine = _engine(options_window_open=True)
+    monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
+
+    await _run(monitor, engine, monitor._MAX_CONSECUTIVE_CLOSE_FAILURES)
+
+    assert monitor._close_attempts_exhausted("SMH260605P00550000") is True
+
+
+@pytest.mark.asyncio
 async def test_execute_exits_keeps_trying_below_threshold():
-    engine = MagicMock()
-    engine.close_position = AsyncMock(return_value=False)
+    engine = _engine()
     monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
 
     await _run(monitor, engine, monitor._MAX_CONSECUTIVE_CLOSE_FAILURES - 1)
@@ -165,8 +245,7 @@ async def test_execute_exits_uses_short_cooldown_for_expiring_position(monkeypat
     """
     from types import SimpleNamespace
 
-    engine = MagicMock()
-    engine.close_position = AsyncMock(return_value=False)
+    engine = _engine()
     monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
     clock = {"t": 1000.0}
     monkeypatch.setattr(monitor, "_now", lambda: clock["t"])

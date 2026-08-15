@@ -46,6 +46,17 @@ def _make_engine(market_schedule_returns_options_open: bool = True) -> Execution
     engine._record_result = Mock()
     engine._market_schedule = MagicMock()
     engine._market_schedule.is_market_open_for_options = Mock(return_value=market_schedule_returns_options_open)
+    engine._clock_closed_until = None
+    engine._calendar_alert_ts = float("-inf")
+    return engine
+
+
+def _dead_calendar_engine() -> ExecutionEngine:
+    """Engine whose calendar failed to load — the strict gate raises forever."""
+    engine = _make_engine()
+    engine._market_schedule.is_market_open_for_options = Mock(
+        side_effect=RuntimeError("Cannot verify market hours without calendar")
+    )
     return engine
 
 
@@ -102,6 +113,163 @@ async def test_options_close_outside_rth_skips_submit() -> None:
 
     assert closed is False
     client.create_order.assert_not_called()
+    client.close_position.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_options_close_attempted_when_calendar_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dead exchange calendar must not block exits.
+
+    The strict gate raises when the calendar failed to load, and MarketSchedule
+    is a process-lifetime singleton — so one failed init meant close_position
+    could never submit ANY option exit for the life of the process, and an ITM
+    contract rode to expiry to be auto-exercised into equity Orion can neither
+    see nor sell (2a21775e). With the broker clock reporting open, the close
+    must still be ATTEMPTED — and still reduce-only.
+    """
+    _patch_persist(monkeypatch)
+    engine = _dead_calendar_engine()
+    client = _make_client(broker_qty="10", avg_entry="1.0", limit_result={"id": "o", "status": "accepted"})
+    client.get_clock = AsyncMock(return_value={"is_open": True})
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="NVDA260522C00250000", qty=10.0, exit_signal=_exit_signal(), direction="LONG", current_price=2.50
+    )
+
+    assert closed is True
+    client.create_order.assert_called_once()
+    assert client.create_order.call_args[1]["position_intent"] == "sell_to_close"
+
+
+@pytest.mark.asyncio
+async def test_calendar_fallback_trusts_the_broker_over_the_wall_clock() -> None:
+    """The half-day trap (Codex review): a weekday 9:30–16:00 wall clock would
+    call 14:00 ET open on a session that closed at 13:00. Alpaca QUEUES a day
+    order placed after the close instead of rejecting it, and the close path
+    records an `accepted` order as a completed exit — so the 0DTE would be
+    dropped from tracking and still expire unexited. The broker clock knows the
+    session ended; nothing may be submitted."""
+    engine = _dead_calendar_engine()
+    client = _make_client(broker_qty="10", limit_result={"id": "x"}, native_result={"id": "y"})
+    client.get_clock = AsyncMock(return_value={"is_open": False})
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="NVDA260522C00250000", qty=10.0, exit_signal=_exit_signal(), direction="LONG", current_price=2.50
+    )
+
+    assert closed is False
+    client.create_order.assert_not_called()
+    client.close_position.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "clock",
+    [
+        {"error": "Server error '500'"},
+        {},  # no is_open field
+        {"is_open": "true"},  # truthy but not the boolean
+        ["not", "a", "dict"],  # malformed payload
+    ],
+)
+@pytest.mark.asyncio
+async def test_calendar_fallback_fails_closed_on_any_unusable_clock(clock) -> None:
+    """Only an unambiguous `is_open: True` from a well-formed payload may
+    authorize a submit. A blind submit is worse than a delayed exit."""
+    engine = _dead_calendar_engine()
+    client = _make_client(broker_qty="10", limit_result={"id": "x"}, native_result={"id": "y"})
+    client.get_clock = AsyncMock(return_value=clock)
+    engine._get_gateway_client = lambda: client
+
+    assert await engine.options_close_window_open() is False
+
+
+@pytest.mark.asyncio
+async def test_calendar_fallback_fails_closed_when_clock_raises() -> None:
+    engine = _dead_calendar_engine()
+    client = _make_client(broker_qty="10")
+    client.get_clock = AsyncMock(side_effect=RuntimeError("gateway down"))
+    engine._get_gateway_client = lambda: client
+
+    assert await engine.options_close_window_open() is False
+
+
+@pytest.mark.asyncio
+async def test_calendar_fallback_caches_the_closed_verdict() -> None:
+    """Closed is the state the every-~5s retry across every open position sits
+    in, so caching it is what keeps this off a Gateway that has answered a 429
+    storm before. A stale `closed` only ever delays an exit."""
+    engine = _dead_calendar_engine()
+    client = _make_client(broker_qty="10")
+    client.get_clock = AsyncMock(return_value={"is_open": False})
+    engine._get_gateway_client = lambda: client
+
+    assert await engine.options_close_window_open() is False
+    assert await engine.options_close_window_open() is False
+    client.get_clock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_open_verdict_is_reused_only_by_the_advisory_gates() -> None:
+    """An `open` verdict is reusable for a moment, so the monitor's pre-check and
+    the engine's entry gate — milliseconds apart on the same attempt — don't each
+    re-read the clock. The immediately-before-submit check must never reuse it: a
+    stale `open` authorizes a submit after the session close, which Alpaca queues
+    rather than rejects (Codex review)."""
+    engine = _dead_calendar_engine()
+    client = _make_client(broker_qty="10")
+    client.get_clock = AsyncMock(return_value={"is_open": True})
+    engine._get_gateway_client = lambda: client
+
+    assert await engine.options_close_window_open() is True
+    assert await engine.options_close_window_open() is True
+    client.get_clock.assert_awaited_once()  # advisory → reused
+
+    client.get_clock.return_value = {"is_open": False}
+    assert await engine.options_close_window_open(require_fresh=True) is False  # always re-reads
+
+
+@pytest.mark.asyncio
+async def test_options_close_aborted_when_session_closes_mid_flight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The gate is separated from the submit by a cancel sweep and a fresh quote.
+    If the session closes across those awaits, nothing may be submitted — a
+    queued day order would be recorded as a completed exit and the still-open
+    position dropped from tracking (Codex review)."""
+    _patch_persist(monkeypatch)
+    engine = _dead_calendar_engine()
+    client = _make_client(broker_qty="10", avg_entry="1.0", limit_result={"id": "o"}, native_result={"id": "n"})
+    # Open at the gate, closed by the time the submit is reached.
+    client.get_clock = AsyncMock(side_effect=[{"is_open": True}, {"is_open": False}])
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="NVDA260522C00250000", qty=10.0, exit_signal=_exit_signal(), direction="LONG", current_price=2.50
+    )
+
+    assert closed is False
+    client.create_order.assert_not_called()
+    client.close_position.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_native_escalation_aborted_when_session_closes_mid_flight(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Same guard on the escalation path: it is reached only after a quote
+    lookup (and sometimes a position re-check), so it can cross the close too."""
+    _patch_persist(monkeypatch)
+    engine = _dead_calendar_engine()
+    # No mark and no fresh quote → straight to the native escalation.
+    client = _make_client(broker_qty="10", native_result={"id": "should-not-be-used"})
+    client.get_clock = AsyncMock(side_effect=[{"is_open": True}, {"is_open": False}])
+    engine._get_gateway_client = lambda: client
+
+    closed = await engine.close_position(
+        ticker="NVDA260522C00250000", qty=10.0, exit_signal=_exit_signal(), direction="LONG", current_price=None
+    )
+
+    assert closed is False
     client.close_position.assert_not_called()
 
 
