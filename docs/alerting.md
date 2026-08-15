@@ -34,7 +34,10 @@ The launchd probe does not alert on a running job's retained previous exit
 status. It also does not duplicate exit code `2` from `deadman` or
 `market-open-dataflow-check`, because those checks send their own incident
 notification. Retired `meta_search` and `meta_weekly` database liveness rows
-are ignored by the dead-man watchdog.
+are ignored by the dead-man watchdog through their 2026-07-02T07:32:50Z
+retirement cutoff (the deletion commit) — if either name is ever redeployed
+and publishes again, even an error-only cycle that never reaches success, it
+automatically resumes normal liveness alerting from that point on.
 
 ### Log-only status
 

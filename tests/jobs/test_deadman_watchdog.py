@@ -113,6 +113,169 @@ def test_retired_service_rows_are_ignored():
     assert evaluate_service_liveness(rows, AFTER_HOURS_UTC, market_open=False) == []
 
 
+def test_reactivated_retired_service_resumes_normal_alerting():
+    """A retired-service row is hidden only through its OWN retirement cutoff
+    (2026-07-02T07:32:50Z, the deletion commit, for meta_search/meta_weekly),
+    judged off updated_at. If a retired name is ever redeployed and publishes
+    a fresh successful cycle, updated_at moves past the cutoff and the row is
+    judged exactly like any other registered service — no watchdog roster
+    edit is needed to un-hide a name that starts reporting again."""
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)  # long after the retirement cutoff
+    rows = [_row("meta_search", age_seconds=900, budget=300, now=now)]
+
+    alerts = evaluate_service_liveness(rows, now)
+
+    assert [a.name for a in alerts] == ["meta_search"]
+
+
+def test_reactivated_but_failing_retired_service_still_alerts():
+    """A redeploy that fails before its first successful cycle must not stay
+    hidden. publish_liveness bumps updated_at on an error-only publish without
+    ever advancing last_success_ts_utc, so judging reactivation off
+    last_success_ts_utc would leave an actively-crashing redeploy silently
+    unmonitored forever — precisely the failure mode a dead-man watchdog
+    exists to catch. This row's last_success_ts_utc is still the ancient
+    pre-retirement value; only updated_at is recent, mirroring a real
+    error-only republish."""
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    rows = [
+        ServiceLiveness(
+            service="meta_weekly",
+            last_success_ts_utc=datetime(2026, 6, 1, tzinfo=UTC),  # never succeeded post-redeploy
+            cycle_count=3,
+            last_error="startup crash",
+            cadence_budget_seconds=300,
+            updated_at=now,  # error-only publish just happened
+        )
+    ]
+
+    alerts = evaluate_service_liveness(rows, now)
+
+    assert [a.name for a in alerts] == ["meta_weekly"]
+
+
+def test_retired_service_row_predating_cutoff_still_ignored_even_when_fresh():
+    """A row whose OWN updated_at is still on/before the retirement cutoff
+    stays hidden even with a budget large enough to look "fresh" by age
+    alone — a generous budget must never substitute for genuine post-cutoff
+    activity."""
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    rows = [
+        ServiceLiveness(
+            service="meta_search",
+            last_success_ts_utc=datetime(2026, 7, 1, tzinfo=UTC),
+            cycle_count=3,
+            last_error=None,
+            cadence_budget_seconds=86400 * 365,  # huge budget => "fresh" by age alone
+            updated_at=datetime(2026, 7, 1, tzinfo=UTC),  # last touched before retirement
+        )
+    ]
+
+    assert evaluate_service_liveness(rows, now) == []
+
+
+def test_retired_service_cutoff_boundary_exact_second_still_hidden():
+    """A row updated at the exact retirement-commit instant is still
+    considered pre-cutoff (the check is <=, not <) — the commit itself must
+    never read as evidence of a reactivation."""
+    cutoff = datetime(2026, 7, 2, 7, 32, 50, tzinfo=UTC)
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    rows = [
+        ServiceLiveness(
+            service="meta_search",
+            last_success_ts_utc=cutoff,
+            cycle_count=3,
+            last_error=None,
+            cadence_budget_seconds=300,
+            updated_at=cutoff,
+        )
+    ]
+
+    assert evaluate_service_liveness(rows, now) == []
+
+
+def test_retired_service_cutoff_boundary_one_second_after_alerts():
+    """A row updated one second after the retirement-commit instant is a
+    genuine reactivation and is judged normally."""
+    cutoff = datetime(2026, 7, 2, 7, 32, 50, tzinfo=UTC)
+    just_after = cutoff + timedelta(seconds=1)
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    rows = [
+        ServiceLiveness(
+            service="meta_search",
+            last_success_ts_utc=just_after,
+            cycle_count=3,
+            last_error=None,
+            cadence_budget_seconds=300,
+            updated_at=just_after,
+        )
+    ]
+
+    assert [a.name for a in evaluate_service_liveness(rows, now)] == ["meta_search"]
+
+
+def test_retired_service_row_with_future_dated_update_stays_hidden():
+    """A retired-service row whose updated_at is corrupted/clock-skewed into
+    the future must not be treated as reactivation evidence — trusting it
+    would both wrongly resume paging on bad data AND (since a future
+    last_success_ts_utc can never exceed its budget) permanently blind the
+    very check reactivation is supposed to restore."""
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    rows = [
+        ServiceLiveness(
+            service="meta_search",
+            last_success_ts_utc=now + timedelta(hours=1),
+            cycle_count=3,
+            last_error=None,
+            cadence_budget_seconds=300,
+            updated_at=now + timedelta(hours=1),  # far beyond FUTURE_SKEW_SECONDS
+        )
+    ]
+
+    assert evaluate_service_liveness(rows, now) == []
+
+
+def test_future_dated_service_success_alerts_as_data_quality_bug():
+    """Any service (not just a retired one) with a last_success_ts_utc beyond
+    FUTURE_SKEW_SECONDS in the future is a clock/data-quality bug and must
+    alert explicitly — a negative age can never exceed a budget, so without
+    this guard a corrupted row would look permanently, silently healthy."""
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    rows = [_row("ingestion", age_seconds=-3600, budget=300, now=now)]  # 1h in the future
+
+    alerts = evaluate_service_liveness(rows, now)
+
+    assert len(alerts) == 1
+    assert alerts[0].name == "ingestion"
+    assert "FUTURE-DATED" in alerts[0].message
+
+
+def test_reactivated_retired_service_with_future_dated_success_alerts():
+    """A row that un-hides (updated_at past the retirement cutoff — e.g. a
+    genuine current error publish) but whose last_success_ts_utc is separately
+    corrupted into the future must not go silent. Reactivation alone is not
+    enough: the ordinary staleness check would compute a negative age from
+    the bad last_success_ts_utc and never alert, so this is caught as its own
+    clock/data-quality finding instead."""
+    now = datetime(2026, 8, 15, 12, 0, tzinfo=UTC)
+    rows = [
+        ServiceLiveness(
+            service="meta_search",
+            last_success_ts_utc=now + timedelta(hours=1),  # corrupted, stale bad write
+            cycle_count=3,
+            last_error="startup crash",
+            cadence_budget_seconds=300,
+            updated_at=now,  # genuine current error publish — past the cutoff
+        )
+    ]
+
+    alerts = evaluate_service_liveness(rows, now)
+
+    assert len(alerts) == 1
+    assert alerts[0].name == "meta_search"
+    assert "FUTURE-DATED" in alerts[0].message
+
+
 def test_stage_fresh_no_alert():
     now = datetime.now(UTC)
     max_ts = now - timedelta(seconds=60)
@@ -327,6 +490,30 @@ async def test_run_watchdog_retired_service_is_quiet_after_hours():
 
     assert [a for a in alerts if a.kind == "service"] == []
     sent.assert_not_awaited()
+
+
+async def test_run_watchdog_reactivated_retired_service_alerts():
+    """End-to-end: a retired name whose row is stamped AFTER its retirement
+    cutoff (i.e. it genuinely published again) must resume paging through the
+    full run_watchdog path, not just the pure decision function."""
+    reactivated_now = datetime(2026, 8, 15, 2, 0, tzinfo=UTC)  # after-hours, post-cutoff
+    await publish_liveness("meta_weekly", cadence_budget_seconds=300)
+    async with _test_sessionmaker()() as session:
+        row = await session.get(ServiceLiveness, "meta_weekly")
+        # Anchor both timestamps to the injected clock — publish_liveness stamped
+        # them with the real wall clock, which (being "later" than this test's
+        # synthetic reactivated_now) would otherwise look future-dated to the
+        # reactivation check and be rejected as corrupted data.
+        row.last_success_ts_utc = reactivated_now - timedelta(seconds=1000)
+        row.updated_at = reactivated_now - timedelta(seconds=1000)
+        await session.commit()
+
+    sent = AsyncMock(return_value=True)
+    with patch.object(dw, "send_discord_alert", sent):
+        alerts = await run_watchdog(sessionmaker=_test_sessionmaker(), now_utc=reactivated_now)
+
+    assert [a.name for a in alerts if a.kind == "service"] == ["meta_weekly"]
+    sent.assert_awaited()
 
 
 async def test_run_watchdog_stage_alerts_only_during_market_hours():

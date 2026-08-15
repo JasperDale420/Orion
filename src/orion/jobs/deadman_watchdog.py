@@ -16,7 +16,14 @@ Runs as a standalone launchd one-shot every 5 minutes. Three independent checks:
    always-on jobs still alert around the clock. Services register themselves on
    their first publish, so a service the watchdog has never seen is silently
    skipped — never alerted on absence it cannot attribute. Rows left behind by
-   explicitly retired services are ignored.
+   explicitly retired services are ignored only through their own retirement
+   cutoff: if a retired name is ever redeployed and publishes again — even an
+   error-only cycle that never reaches success — its row's ``updated_at``
+   moves past the cutoff and it falls back into ordinary liveness evaluation
+   on its own, reactivating with no watchdog code change. A row whose
+   timestamp sits beyond the current time (clock skew or corrupted data) is
+   never treated as reactivation evidence, so it cannot forge its own way
+   off the retired list.
 
 2. **Pipeline-depth stage freshness (market-hours-gated, REAL data).** During
    the regular cash session it asserts per-stage freshness on the actual
@@ -86,7 +93,23 @@ MARKET_HOURS_SERVICE_NAMES = frozenset(
         "position_monitor",
     }
 )
-RETIRED_SERVICE_NAMES = frozenset({"meta_search", "meta_weekly"})
+# Services whose code was deleted but whose service_liveness row survived.
+# Each name maps to the exact UTC instant of the deletion commit (1c6609a9,
+# "Delete the LLM solver-evolution machinery", authored 2026-07-02T07:32:50Z
+# per `git show --format=fuller`). A row is skipped only while its own
+# `updated_at` is still at or before that cutoff. A name is not a permanent
+# hide — if the service is ever redeployed, `updated_at` moves past the
+# cutoff and evaluate_service_liveness judges it like any other registered
+# service from then on, budget and market-hours gating included. `updated_at`
+# (not `last_success_ts_utc`) drives reactivation because publish_liveness
+# bumps `updated_at` on an error-only publish too (see
+# shared/liveness.py:_write); a redeploy that fails before its first success
+# would otherwise still advance nothing this check looks at and stay hidden
+# forever — exactly the failure mode a dead-man watchdog exists to catch.
+RETIRED_SERVICE_CUTOFFS: dict[str, datetime] = {
+    "meta_search": datetime(2026, 7, 2, 7, 32, 50, tzinfo=UTC),
+    "meta_weekly": datetime(2026, 7, 2, 7, 32, 50, tzinfo=UTC),
+}
 
 
 def is_nyse_session_open(now_utc: datetime, *, calendar_name: str = _NYSE_CALENDAR) -> bool:
@@ -142,11 +165,35 @@ def evaluate_service_liveness(
     at all (the watchdog never invents absence for a service it has never seen).
     Market-session services are informational outside the cash session because
     those loops can legitimately stop publishing when there is no market data to
-    process.
+    process. A FUTURE-DATED last_success_ts_utc (clock or data corruption) is
+    its own alert rather than silent: a negative age can never exceed a
+    budget, so without this a corrupted row would look permanently fresh —
+    including a retired-then-reactivated row whose freshly-bumped updated_at
+    un-hid it but whose last_success_ts_utc is still bad data.
     """
     alerts: list[LivenessAlert] = []
     for row in rows:
-        if row.service in RETIRED_SERVICE_NAMES:
+        retired_cutoff = RETIRED_SERVICE_CUTOFFS.get(row.service)
+        if retired_cutoff is not None and _still_retired(row, retired_cutoff, now_utc):
+            continue
+        last_success = _service_last_success_utc(row)
+        if last_success > now_utc + timedelta(seconds=FUTURE_SKEW_SECONDS):
+            alerts.append(
+                LivenessAlert(
+                    kind="service",
+                    name=row.service,
+                    age_seconds=(now_utc - last_success).total_seconds(),
+                    budget_seconds=row.cadence_budget_seconds,
+                    dedupe_suffix="_future_ts",
+                    message=(
+                        f"service '{row.service}' has a FUTURE-DATED last_success_ts_utc — newest "
+                        f"success is {(last_success - now_utc).total_seconds():.0f}s in the future "
+                        f"(tolerance {FUTURE_SKEW_SECONDS}s); this indicates a clock or data-quality "
+                        "bug and disables the staleness check for this service until fixed (a "
+                        "negative age can never exceed its budget)"
+                    ),
+                )
+            )
             continue
         age = _service_age_seconds(row, now_utc)
         if age > row.cadence_budget_seconds:
@@ -170,11 +217,40 @@ def evaluate_service_liveness(
     return alerts
 
 
-def _service_age_seconds(row: ServiceLiveness, now_utc: datetime) -> float:
+def _service_last_success_utc(row: ServiceLiveness) -> datetime:
     last = row.last_success_ts_utc
     if last.tzinfo is None:
         last = last.replace(tzinfo=UTC)
-    return (now_utc - last).total_seconds()
+    return last
+
+
+def _service_age_seconds(row: ServiceLiveness, now_utc: datetime) -> float:
+    return (now_utc - _service_last_success_utc(row)).total_seconds()
+
+
+def _still_retired(row: ServiceLiveness, retired_cutoff: datetime, now_utc: datetime) -> bool:
+    """True while a retired-service row should stay hidden from liveness checks.
+
+    Judged off ``updated_at`` rather than ``last_success_ts_utc``:
+    ``publish_liveness`` bumps ``updated_at`` on an error-only publish too, so a
+    redeployed service that fails before its first successful cycle still
+    un-hides here — using only ``last_success_ts_utc`` would leave an
+    actively-crashing redeploy silently unmonitored forever, exactly the
+    failure mode this watchdog exists to catch.
+
+    A row whose ``updated_at`` is beyond ``now_utc`` (past the same
+    ``FUTURE_SKEW_SECONDS`` tolerance the stage-freshness check uses) is
+    corrupted or clock-skewed, not evidence of reactivation, so it stays
+    retired: trusting it would both wrongly resume paging AND, since a
+    future ``last_success_ts_utc`` can never exceed its budget, permanently
+    blind the very check reactivation is supposed to restore.
+    """
+    updated = row.updated_at
+    if updated.tzinfo is None:
+        updated = updated.replace(tzinfo=UTC)
+    if updated > now_utc + timedelta(seconds=FUTURE_SKEW_SECONDS):
+        return True
+    return updated <= retired_cutoff
 
 
 def _suppressed_market_service_names(rows: list[ServiceLiveness], now_utc: datetime) -> list[str]:
