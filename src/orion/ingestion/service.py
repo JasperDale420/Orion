@@ -1219,7 +1219,7 @@ class IngestionService:
         return True
 
     async def _post_flow_parity_summary(self) -> None:
-        """Aggregate the day's flow_push_parity rows and post a Discord summary.
+        """Aggregate daily flow-push parity; log GREEN and page only RED.
 
         Reports total push vs poll counts, total missed-by-push (the cutover
         gate, excluding the uwflow_* unmatchable class), median latency
@@ -1256,14 +1256,16 @@ class IngestionService:
             verdict = "GREEN" if green else "RED"
             latency_str = f"{latency_avg:.1f}s" if latency_avg is not None else "n/a"
 
-            await send_discord_alert(
+            summary = (
                 f"Flow-push shadow parity ({verdict}) — cycles={cycles}, "
                 f"push={int(push_total)}, poll={int(poll_total)}, "
                 f"missed_by_push={true_missed} (unmatchable={int(unmatchable_total)}), "
                 f"median_latency_improvement={latency_str}, "
-                f"reconcile_window={int(window_s or 0)}s",
-                dedupe_key="flow_push_parity_daily",
+                f"reconcile_window={int(window_s or 0)}s"
             )
+            logger.info("flow_push_parity_summary", verdict=verdict, summary=summary)
+            if not green:
+                await send_discord_alert(summary, dedupe_key="flow_push_parity_daily")
         except Exception as e:
             logger.error(f"flow_push_parity summary failed: {e}", exc_info=True)
 

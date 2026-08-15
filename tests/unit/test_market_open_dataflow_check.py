@@ -330,6 +330,7 @@ def test_discord_notifier_posts_discord_content_payload(monkeypatch: pytest.Monk
     def _capture(req, timeout=None):  # noqa: ARG001
         captured["url"] = req.full_url
         captured["body"] = json.loads(req.data.decode("utf-8"))
+        captured["user_agent"] = req.headers.get("User-agent")
         return _Resp()
 
     monkeypatch.setattr(urllib.request, "urlopen", _capture)
@@ -340,3 +341,4 @@ def test_discord_notifier_posts_discord_content_payload(monkeypatch: pytest.Monk
     assert set(body.keys()) == {"content"}
     assert "bronze feed STALLED" in body["content"]
     assert "CRITICAL" in body["content"]
+    assert captured["user_agent"] == "Orion-market-open-dataflow-check/1.0"

@@ -9,13 +9,14 @@ Runs as a standalone launchd one-shot every 5 minutes. Three independent checks:
    of order flow blocked, noticed by accident). Deliberately NOT market-hours
    gated, and checked first so its page cannot be lost to a failure below.
 
-1. **Service liveness.** Reads every ``service_liveness`` row and alerts when
+1. **Service liveness.** Reads current ``service_liveness`` rows and alerts when
    ``now - last_success_ts_utc`` exceeds that service's own declared
    ``cadence_budget_seconds``. Market-session services such as ingestion and
    execution are informational outside the NYSE cash session; scheduled
    always-on jobs still alert around the clock. Services register themselves on
    their first publish, so a service the watchdog has never seen is silently
-   skipped — never alerted on absence it cannot attribute.
+   skipped — never alerted on absence it cannot attribute. Rows left behind by
+   explicitly retired services are ignored.
 
 2. **Pipeline-depth stage freshness (market-hours-gated, REAL data).** During
    the regular cash session it asserts per-stage freshness on the actual
@@ -85,6 +86,7 @@ MARKET_HOURS_SERVICE_NAMES = frozenset(
         "position_monitor",
     }
 )
+RETIRED_SERVICE_NAMES = frozenset({"meta_search", "meta_weekly"})
 
 
 def is_nyse_session_open(now_utc: datetime, *, calendar_name: str = _NYSE_CALENDAR) -> bool:
@@ -144,6 +146,8 @@ def evaluate_service_liveness(
     """
     alerts: list[LivenessAlert] = []
     for row in rows:
+        if row.service in RETIRED_SERVICE_NAMES:
+            continue
         age = _service_age_seconds(row, now_utc)
         if age > row.cadence_budget_seconds:
             if not market_open and row.service in MARKET_HOURS_SERVICE_NAMES:

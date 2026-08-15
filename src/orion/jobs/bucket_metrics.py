@@ -10,7 +10,8 @@ Verdicts follow the sample-size discipline from the 2026-07 recovery plan:
 under 30 closed trades touch nothing; at 100 the first expectancy verdict
 is meaningful (SE of a ~40% win rate is ±5pp); sizing up requires n>=100,
 positive expectancy, and PF>=1.15; a trailing-50 PF under 0.6 flags the
-bucket for halting. Verdicts are ADVISORY — they alert, they never act.
+bucket for halting. Actionable verdicts are ADVISORY Discord alerts; routine
+results remain in structured logs and never act.
 """
 
 from __future__ import annotations
@@ -191,7 +192,7 @@ def _format_summary(metrics: dict[str, Any]) -> str:
 
 
 async def run_bucket_metrics(days: int = 30, post_discord: bool = True) -> dict[str, Any]:
-    """Compute, log, and (optionally) post the nightly metrics summary."""
+    """Compute and log nightly metrics; page only actionable verdicts."""
     metrics = await compute_bucket_metrics(days=days)
     logger.info(
         "bucket_metrics",
@@ -205,12 +206,11 @@ async def run_bucket_metrics(days: int = 30, post_discord: bool = True) -> dict[
         for name, s in metrics["by_bucket"].items()
         if s["verdict"] in ("consider_sizing_up", "consider_halting")
     ]
-    if post_discord:
+    if post_discord and flagged:
         from orion.shared.alerts import send_discord_alert
 
         text = _format_summary(metrics)
-        if flagged:
-            text += "\n⚠ verdicts: " + "; ".join(flagged)
+        text += "\n⚠ verdicts: " + "; ".join(flagged)
         await send_discord_alert(text, dedupe_key="bucket_metrics_nightly")
     return metrics
 

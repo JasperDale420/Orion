@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Discord alert noise now reflects current faults instead of retired/stale state**: the dead-man watchdog ignores the `meta_search` and `meta_weekly` liveness rows left behind when those services were deleted, and the launchd probe treats a current PID as healthy even when launchd retains a previous `-9`/`-15` exit status. The probe also recognizes exit code `2` from the self-reporting dead-man and market-open checks as "condition reported," preventing a second generic job-failure page for the same incident. Missing daemons and unexpected idle-job failures still alert.
+- **The market-open feed CRITICAL can reach Discord**: its stdlib webhook request now sends an explicit User-Agent, fixing the repeated HTTP 403 responses already recorded in `market_open_dataflow_check.stderr.log`.
+
+### Changed
+
+- **Routine Discord reports are log-only**: nightly bucket metrics page only for `consider_halting` / `consider_sizing_up`, and daily flow-push shadow parity pages only on RED. All computed detail remains in structured logs; trading/risk, broker-truth, feed-down, unprotected-position, and recovery alerts remain enabled.
+
 ### Added
 
 - **Fail-closed risk-baseline gate.** Because the figures above were persisted under the broken convention, a restart would have restored them and armed the kill switch from a 100x-understated loss history. `risk_state` now carries an `accounting_version` (migration `b5_risk_accounting_version`); `RiskManager` refuses every order while the persisted row does not carry the current version, and stamps the version only when the in-memory figures are genuinely on it — a gated process cannot relabel legacy figures as verified. The gate is raised before the state read and lowered only on a proven-safe read, so a transient DB failure at startup blocks rather than admits. A fresh database is never gated. Exits are unaffected: closing a position does not route through the admission check, so the gate can never trap a position.
