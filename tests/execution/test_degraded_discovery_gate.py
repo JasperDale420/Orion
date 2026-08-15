@@ -25,7 +25,7 @@ import pytest
 os.environ.setdefault("DB_URL", "sqlite+aiosqlite:///:memory:")
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 from sqlalchemy import select
 
@@ -222,7 +222,8 @@ async def test_persist_discovery_status_does_not_raise_on_db_failure() -> None:
     from unittest.mock import patch
 
     # Patch async_session_factory to simulate a write failure
-    fake_factory = AsyncMock(side_effect=RuntimeError("simulated DB failure"))
+    fake_factory = MagicMock()
+    fake_factory.return_value.__aenter__.side_effect = RuntimeError("simulated DB failure")
     with patch("orion.enrichment.heber_context.async_session_factory", fake_factory):
         # Should NOT raise
         await persist_discovery_status(source="bronze_db", streak=0, warn_streak=3)
