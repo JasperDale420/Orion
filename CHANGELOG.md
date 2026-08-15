@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Fixed
 
+- **Local quality gates match the current shared runtime**: logging tests now drain `empire-core`'s asynchronous listener before inspecting captured JSON, and `mypy .` excludes the separately packaged `ci/empire_core` fixture just as CI and pre-commit already do. The full Orion type check is clean instead of reporting unrelated errors from the vendored package copy.
 - **Discord alert noise now reflects current faults instead of retired/stale state**: the dead-man watchdog ignores the `meta_search` and `meta_weekly` liveness rows left behind when those services were deleted, and the launchd probe treats a current PID as healthy even when launchd retains a previous `-9`/`-15` exit status. The probe also recognizes exit code `2` from the self-reporting dead-man and market-open checks as "condition reported," preventing a second generic job-failure page for the same incident. Missing daemons and unexpected idle-job failures still alert.
 - **The market-open feed CRITICAL can reach Discord**: its stdlib webhook request now sends an explicit User-Agent, fixing the repeated HTTP 403 responses already recorded in `market_open_dataflow_check.stderr.log`.
 

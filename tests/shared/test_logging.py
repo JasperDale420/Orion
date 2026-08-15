@@ -3,6 +3,8 @@
 import json
 import logging
 
+import empire_core.logger as empire_logger_module
+
 from orion.shared import logger as logger_module
 from orion.shared.logger import setup_struct_logger
 
@@ -40,6 +42,13 @@ def _first_json(caplog_records, captured_stdout: str) -> dict:
     )
 
 
+def _flush_logging() -> None:
+    """Drain empire-core's optional background listener before assertions."""
+    shutdown = getattr(empire_logger_module, "shutdown_logging", None)
+    if shutdown is not None:
+        shutdown()
+
+
 def test_json_output_structure(caplog, capsys):
     """Verify setup_struct_logger produces JSON with expected fields."""
     logger = setup_struct_logger("test_json_structure")
@@ -47,6 +56,7 @@ def test_json_output_structure(caplog, capsys):
     with caplog.at_level(logging.DEBUG):
         logger.info("Test message", extra_field="extra_value")
 
+    _flush_logging()
     data = _first_json(caplog.records, capsys.readouterr().out)
 
     assert data.get("message") == "Test message" or data.get("event") == "Test message"
@@ -64,6 +74,7 @@ def test_json_output_with_exception(caplog, capsys):
         except ValueError:
             logger.exception("Error occurred")
 
+    _flush_logging()
     data = _first_json(caplog.records, capsys.readouterr().out)
 
     assert data.get("message") == "Error occurred" or data.get("event") == "Error occurred"
