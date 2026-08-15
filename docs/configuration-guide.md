@@ -146,7 +146,7 @@ Per-regime risk multipliers live in `config/regime_risk.yaml` (not env-vars).
 | Variable | Wrapper default | Purpose |
 |---|---|---|
 | `ORION_ML_PREFILTER_THRESHOLD` | `0.05` | LightGBM score gate before solver vote |
-| `ORION_ML_STALE_MODEL_POLICY` | `skip` | What to do if ML scorer is stale: `skip` = block on stale model, `warn` = log but proceed, `bypass` = skip ML entirely |
+| `ORION_ML_STALE_MODEL_POLICY` | `warn` | What to do if ML scorer is stale: `skip` = use heuristic fallback, `warn` = load and warn, `bypass` = skip ML gating |
 | `ORION_HEURISTIC_CAP_LIVE` | `0.65` | Maximum heuristic pre-filter score in live mode |
 | `ORION_CIRCUIT_BREAKER_ENABLED` | `false` | Per-strategy breaker |
 | `ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED` | `false` | Global kill on consecutive failures |
@@ -207,7 +207,7 @@ and retains compressed archives for 14 days.
 | `503` from `/flows` | Heber read unavailable | Check `heber-sync` and the host cache |
 | ML scorer using stale features | Heber Gold sync stuck | `docker logs orion_heber_sync`; inspect `~/.heber-cache/data/gold/` |
 | Born-stale candidates (>600s age at entry) | `ORION_GOLD_FEATURE_LOOKBACK_DAYS` too large or Heber Gold sync stale | Check `~/.heber-cache/data/gold/` freshness; default 7 days is optimal |
-| ML scorer blocked on stale model | `ORION_ML_STALE_MODEL_POLICY=skip` (default) | Set `warn` to log-but-proceed, or `bypass` to skip ML entirely |
+| `Failed to load model ... version` | Artifact was trained with an incompatible scikit-learn release | Retrain under the current lock; Orion rejects it and uses heuristic scoring meanwhile |
 | API returns config-error for auth routes | `ORION_API_KEY` unset | Set it in `.env`, restart |
 
 ## Related
