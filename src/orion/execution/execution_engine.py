@@ -389,6 +389,7 @@ class ExecutionEngine:
         # Data Gateway trading client (lazy-initialized via _get_gateway_client)
         self._gateway_client: Any = None
         self._gateway_available = False
+        self._gateway_positions_snapshot: dict[str, dict[str, float]] | None = None
         # Lazy: set on first _check_gateway_available / market-open check.
         self._gateway_check_ts: datetime | None = None
         self._market_schedule: Any = None
@@ -481,6 +482,13 @@ class ExecutionEngine:
 
             self._gateway_client = get_gateway_trading_client()
         return self._gateway_client
+
+    @property
+    def gateway_positions_snapshot(self) -> dict[str, dict[str, float]] | None:
+        """Latest successfully synchronized Orion-owned broker positions."""
+        if self._gateway_positions_snapshot is None:
+            return None
+        return {symbol: dict(position) for symbol, position in self._gateway_positions_snapshot.items()}
 
     # Close is a critical path — a transient Gateway blip must not abandon an
     # exit for a full monitor cycle. The close path retries a fresh
@@ -897,6 +905,11 @@ class ExecutionEngine:
             self.risk_manager.open_positions = len(
                 [p for p in self.risk_manager.positions.values() if abs(p["qty"]) > 1e-9]
             )
+            self._gateway_positions_snapshot = {
+                symbol: dict(position)
+                for symbol, position in self.risk_manager.positions.items()
+                if abs(position["qty"]) > 1e-9
+            }
             logger.info(
                 "Positions synced from Gateway (Orion-only)",
                 extra={
