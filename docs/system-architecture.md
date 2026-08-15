@@ -62,18 +62,12 @@ flowchart LR
     DEC --> PRE --> RISK --> EE --> GTC --> GW
     GTC --> ORD
 
-    subgraph monitor[Position monitor + EOD]
+    subgraph monitor[Position monitor]
         PM["PositionMonitor<br/>(exit rules)"]
         EXITS["exit_decisions"]
-        EOD["EOD agent<br/>(LLM review)"]
-        META["MetaSearchAgent<br/>(solver evolution)"]
     end
 
     ORD --> PM --> EXITS
-    EXITS --> EOD
-    DEC --> EOD
-    EOD --> META
-    META --> SOL
 
     subgraph storage[Postgres 16 + pgvector]
         TS[("orion_db")]
@@ -224,13 +218,12 @@ existence of the `launchd-health` probe and the one-shot orphan-close plist.
 ## Storage topology
 
 ```
-Postgres 16 + pgvector  ──  authoritative state
+Postgres 16  ──  authoritative state
     ├── Bronze / Silver / Gold tables (plain Postgres tables)
     ├── Execution state (orders, fills, positions, risk_snapshots)
     ├── Solver lifecycle (solvers, solver_metrics, meta_experiments, …)
     ├── Operational (system_status, ingest_watermarks, dead_letter_queue,
     │                audit_log, signal_live, trade_journal_entries)
-    └── RAG (rag_documents — pgvector embeddings)
 
 Heber parquet cache (~/.heber-cache/data)  ──  historical / training data
     ├── Silver: flow_alerts, bars, darkpool, market_tide, greek_exposure,
@@ -252,15 +245,16 @@ second-to-start always loses.
 
 | Role | Native (launchd) | Docker Compose |
 |---|---|---|
-| Ingestion | `com.empire.orion.ingestion` | `ingestion` |
-| Execution | `com.empire.orion.execution` | `execution` |
+| Ingestion | `com.empire.orion.ingestion` | `ingestion` (profile: `docker`) |
+| Execution | `com.empire.orion.execution` | `execution` (profile: `docker`) |
 | Feature enrichment | — | `feature_enrichment` |
-| Position monitor | — | `position-monitor` |
-| EOD agent | — | `eod-agent` |
-| RAG indexer | — | `indexer` |
+| Position monitor | `com.empire.orion.position-monitor` | `position-monitor` (profile: `docker`) |
+| Data quality | `com.empire.orion.data-quality` | `data-quality` (profile: `docker`) |
 | TimescaleDB | — | `timescaledb` (always) |
-| MCP server | — | `mcp-server` |
+| Heber cache sync | — | `heber-sync` |
 | Launchd health probe | `com.empire.orion.launchd-health` | — |
+| Dead-man watchdog | `com.empire.orion.deadman` | — |
+| Log rotation | `com.empire.orion.log-rotation` | — |
 | One-shot orphan close (disabled) | `com.empire.orion.orphan-close.plist.DISABLED-260526` | — |
 
 The native plists exist to bypass the Docker Desktop 16 GiB VM ceiling that

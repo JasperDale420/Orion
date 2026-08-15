@@ -8,13 +8,14 @@ Two deployment modes coexist — only one may be active per role at a time. The 
 |---|---|---|
 | Ingestion | `com.empire.orion.ingestion` | `ingestion` (profile: docker) |
 | Execution | `com.empire.orion.execution` | `execution` (profile: docker) |
+| Position monitor | `com.empire.orion.position-monitor` | `position-monitor` (profile: docker) |
+| Data quality | `com.empire.orion.data-quality` | `data-quality` (profile: docker) |
 | Launchd health probe | `com.empire.orion.launchd-health` | — |
+| Dead-man watchdog | `com.empire.orion.deadman` | — |
+| Log rotation | `com.empire.orion.log-rotation` | — |
 | Feature enrichment | — | `feature_enrichment` (default) |
-| Position monitor | — | `position-monitor` (profile: docker) |
-| Data quality | — | `data-quality` (profile: docker) |
 | TimescaleDB | — | `timescaledb` (always) |
-| MCP server | — | `mcp-server` (default) |
-| RAG indexer | — | `indexer` (default) |
+| Heber cache sync | — | `heber-sync` (default) |
 
 **Rule:** never run native + Docker in the same role simultaneously. Stop one before starting the other.
 
@@ -23,7 +24,7 @@ Two deployment modes coexist — only one may be active per role at a time. The 
 ### 1. Start support services (Docker)
 
 ```bash
-docker compose up -d timescaledb feature_enrichment indexer mcp-server
+docker compose up -d
 ```
 
 Wait for TimescaleDB to be healthy:
@@ -37,6 +38,8 @@ docker compose ps timescaledb
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.empire.orion.ingestion
 launchctl kickstart -k gui/$(id -u)/com.empire.orion.execution
+launchctl kickstart -k gui/$(id -u)/com.empire.orion.position-monitor
+launchctl kickstart -k gui/$(id -u)/com.empire.orion.data-quality
 ```
 
 ### 3. Check status
@@ -44,6 +47,8 @@ launchctl kickstart -k gui/$(id -u)/com.empire.orion.execution
 ```bash
 launchctl print gui/$(id -u)/com.empire.orion.ingestion
 launchctl print gui/$(id -u)/com.empire.orion.execution
+launchctl print gui/$(id -u)/com.empire.orion.position-monitor
+launchctl print gui/$(id -u)/com.empire.orion.data-quality
 launchctl list | grep com.empire.orion
 ```
 
@@ -54,6 +59,8 @@ Stop native services:
 ```bash
 launchctl stop gui/$(id -u)/com.empire.orion.ingestion
 launchctl stop gui/$(id -u)/com.empire.orion.execution
+launchctl stop gui/$(id -u)/com.empire.orion.position-monitor
+launchctl stop gui/$(id -u)/com.empire.orion.data-quality
 ```
 
 Stop Docker support services:
@@ -97,8 +104,8 @@ docker compose ps
 ### Exit 127 on launchd service
 
 **Symptom:** `launchctl print` shows last exit code 127; service never starts.
-**Cause:** wrong `uv` path in ProgramArguments. Must be `~/.local/bin/uv`, not `/opt/homebrew/bin/uv`.
-**Fix:** edit the plist in `scripts/launchd/`, correct the path, reload:
+**Cause:** the plist or wrapper references a command that does not exist.
+**Fix:** correct the path in `scripts/launchd/`, then reload:
 ```bash
 launchctl unload ~/Library/LaunchAgents/com.empire.orion.<role>.plist
 launchctl load ~/Library/LaunchAgents/com.empire.orion.<role>.plist
@@ -118,8 +125,8 @@ launchctl load ~/Library/LaunchAgents/com.empire.orion.<role>.plist
 **Fix:** stop the unwanted one:
 ```bash
 launchctl stop gui/$(id -u)/com.empire.orion.<role>
-# or
-docker rm -f orion_<role>
+# or stop the Docker fallback
+docker compose --profile docker stop <role>
 ```
 
 ### Born-stale candidates (>600s age at entry)

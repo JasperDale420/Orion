@@ -1,19 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-One-shot launchd agent that closes orphaned options positions at the
-next market open (2026-05-22 9:35 AM ET = 13:35 UTC).
+DISABLED reference for the one-shot launchd agent that closed orphaned options
+positions at the 2026-05-22 market open. Do not install this plist.
 
-INSTALL ONCE:
-    cp scripts/launchd/com.empire.orion.orphan-close.plist ~/Library/LaunchAgents/
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.orphan-close.plist
-
-CHECK STATUS:
-    launchctl print gui/$(id -u)/com.empire.orion.orphan-close
-
-REMOVE AFTER USE (this is a ONE-SHOT — does not need to live in
-LaunchAgents permanently):
-    launchctl bootout gui/$(id -u)/com.empire.orion.orphan-close
-    rm ~/Library/LaunchAgents/com.empire.orion.orphan-close.plist
+This file is retained only for incident history. Its calendar trigger is stale
+and it must not be copied into LaunchAgents.
 
 CONTEXT — see scripts/close_orphaned_positions.py for the full incident
 write-up. 20 options positions worth ~$522K mark value, all expiring

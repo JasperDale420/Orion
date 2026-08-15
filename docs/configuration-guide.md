@@ -1,17 +1,16 @@
 # Orion — Configuration Guide
 
 All runtime configuration is **Pydantic Settings** in `src/orion/config.py`.
-Four classes, each with its own env-var prefix.
+Three classes own the supported environment variables.
 
 | Class | Prefix | Concern |
 |---|---|---|
-| `SystemSettings` | `ORION_` | DB, Gateway, Heber, universe, ML, RAG, metrics |
+| `SystemSettings` | `ORION_` plus explicit aliases below | DB, Gateway, Heber, universe, ML, alerts, metrics |
 | `RiskSettings` | `ORION_RISK_` | Daily loss, position caps, Greeks, sector concentration, 0DTE |
-| `MetaSearchSettings` | `ORION_META_` | Solver evaluation weights |
-| `AgentSettings` | `ORION_AGENT_` | LLM model, AI-Gateway URL/key |
+| `HeuristicWeights` | `ORION_HEURISTIC_` | Flow pre-filter weights |
 
-`.env.example` at the repo root lists every supported variable with safe
-defaults — copy it to `.env` and edit.
+`.env.example` at the repo root is the local configuration template — copy it
+to `.env` and edit.
 
 ## Stage selector
 
@@ -132,8 +131,8 @@ section is the map for removing them then.
 
 | Variable | Wrapper default | Purpose |
 |---|---|---|
-| `ORION_RISK_MAX_DAILY_LOSS` | `20000` | USD; kill switch trips at this drawdown |
-| `ORION_RISK_MAX_POSITIONS` | `10` | Concurrent open positions |
+| `ORION_RISK_MAX_DAILY_LOSS` | `2000` | USD; native execution-wrapper default |
+| `ORION_RISK_MAX_POSITIONS` | `20` | Native execution-wrapper default |
 | `ORION_RISK_ALLOCATED_EQUITY` | `100000` | Orion's slice of the shared paper account — sizing % computes off this, not pooled equity |
 
 Other `ORION_RISK_*` knobs (see `config.py`): Greeks limits (`MAX_PORTFOLIO_DELTA`,
@@ -148,7 +147,7 @@ Per-regime risk multipliers live in `config/regime_risk.yaml` (not env-vars).
 |---|---|---|
 | `ORION_ML_PREFILTER_THRESHOLD` | `0.05` | LightGBM score gate before solver vote |
 | `ORION_ML_STALE_MODEL_POLICY` | `skip` | What to do if ML scorer is stale: `skip` = block on stale model, `warn` = log but proceed, `bypass` = skip ML entirely |
-| `ORION_HEURISTIC_CAP_LIVE` | `0.9` | Maximum heuristic pre-filter score in live mode |
+| `ORION_HEURISTIC_CAP_LIVE` | `0.65` | Maximum heuristic pre-filter score in live mode |
 | `ORION_CIRCUIT_BREAKER_ENABLED` | `false` | Per-strategy breaker |
 | `ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED` | `false` | Global kill on consecutive failures |
 | `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE` | `false` | Forces fresh-rollup gate on live signals |
@@ -189,32 +188,15 @@ the lease row already exists. Lease TTL is 120 s (`SERVICE_LEASE_STALE_SECONDS`)
 | `ORION_LOG_DIR` | `./logs` | Mapped to `EMPIRE_LOG_DIR`. Native wrapper points at `Orion/logs/`. |
 | `EMPIRE_LOG_LEVEL` | `INFO` | `DEBUG` / `WARNING` / `ERROR` accepted |
 
-Daily-rotating files under the log dir:
+Native files under the log dir:
 
 - `execution_native.log`, `ingestion_native.log` (structured Python output)
 - `execution_native.stdout.log`, `execution_native.stderr.log` (launchd captures)
 - `launchd_health.log` (alert rows, JSON one-per-line)
 - `orphan_close.log` (only when the one-shot orphan plist runs)
 
-Retention: 14 days by default.
-
-## Agent / LLM (`ORION_AGENT_*`)
-
-| Variable | Purpose |
-|---|---|
-| `ORION_AGENT_MODEL` | LLM model id used by EOD review + MetaSearch |
-| `ORION_AGENT_AI_GATEWAY_URL` | AI-Gateway endpoint (the Go service) |
-| `ORION_AGENT_AI_GATEWAY_KEY` | AI-Gateway auth |
-
-**Never change model IDs without explicit user permission** — this rule comes
-from the monorepo `CLAUDE.md` and applies repo-wide.
-
-## Meta-search (`ORION_META_*`)
-
-Scoring weights used by `MetaSearchAgent` when ranking solver variants:
-information ratio, max drawdown penalty, fill-rate weight, etc. See
-`config.py` for the full list — defaults are tuned and should not be moved
-without solver-evaluation evidence.
+`com.empire.orion.log-rotation` checks these daily, rotates files above 100 MiB,
+and retains compressed archives for 14 days.
 
 ## Resolving common config issues
 
@@ -222,7 +204,7 @@ without solver-evaluation evidence.
 |---|---|---|
 | `RuntimeError: another lease owner holds service_lease_*` | Docker + native running same role | Stop one; verify with `docker compose ps` and `launchctl print gui/$(id -u)/com.empire.orion.<role>` |
 | `[Errno -3] Temporary failure in name resolution` | Container reverted to `host.docker.internal:8080` | Use the external `data-gateway_default` network — see `docker-compose.yml` |
-| `503` from `/search` or `/flows` | pgvector / embeddings / Heber down | Check `mcp-server`, `indexer`, `heber-sync` containers |
+| `503` from `/flows` | Heber read unavailable | Check `heber-sync` and the host cache |
 | ML scorer using stale features | Heber Gold sync stuck | `docker logs orion_heber_sync`; inspect `~/.heber-cache/data/gold/` |
 | Born-stale candidates (>600s age at entry) | `ORION_GOLD_FEATURE_LOOKBACK_DAYS` too large or Heber Gold sync stale | Check `~/.heber-cache/data/gold/` freshness; default 7 days is optimal |
 | ML scorer blocked on stale model | `ORION_ML_STALE_MODEL_POLICY=skip` (default) | Set `warn` to log-but-proceed, or `bypass` to skip ML entirely |

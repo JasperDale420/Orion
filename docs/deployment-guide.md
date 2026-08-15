@@ -10,18 +10,13 @@ instance.
 
 | Role | Canonical runner | Notes |
 |---|---|---|
-| `ingestion` | **native** (launchd) | also fires the single canonical EOD review at 01:05 UTC |
+| `ingestion` | **native** (launchd) | also runs durable close-of-books after each closed session |
 | `execution` | **native** (launchd) | |
-| `meta-search` | **native** (launchd) | daily solver evolution, self-fires 18:00 ET |
-| `meta-weekly` | **native** (launchd) | weekly evolution + promotions, Fri 17:30 ET |
 | `position-monitor` | **native** (launchd) | RB.4 — close-executor for the shared Alpaca account |
 | `data-quality` | **native** (launchd) | RB.4 — `--scheduled` market-hours loop |
 | `timescaledb` | docker (default profile) | Postgres 16 + pgvector |
 | `feature_enrichment` | docker (default profile) | |
-| `pattern-miner` | docker (default profile) | |
-| `indexer` | docker (default profile) | RAG indexer |
 | `heber-sync` | docker (default profile) | host-cache rsync sidecar |
-| `eod-agent` | **profile-gated** (`docker`) | retired from default; manual runs only |
 | `ingestion`/`execution`/`position-monitor`/`data-quality` docker copies | **profile-gated** (`docker`) | escalation/fallback only |
 
 Native and docker copies of the same role are mutually exclusive: Orion's
@@ -46,40 +41,37 @@ All plists live in `scripts/launchd/` and install into
 |---|---|---|
 | `com.empire.orion.execution.plist` | `scripts/run_execution_native.sh` | `orion.main_execution` |
 | `com.empire.orion.ingestion.plist` | `scripts/run_ingestion_native.sh` | `orion.ingestion` |
-| `com.empire.orion.meta-search.plist` | `scripts/run_meta_search.sh` | `orion.main_meta --scheduled` — daily solver evolution, self-fires 18:00 ET weekdays |
-| `com.empire.orion.meta-weekly.plist` | `scripts/run_meta_weekly.sh` | `orion.main_meta_weekly --scheduled` — weekly evolution + promotions, self-fires Fri 17:30 ET |
 | `com.empire.orion.position-monitor.plist` | `scripts/run_position_monitor_native.sh` | `orion.main_position_monitor` — RB.4 close-executor (KeepAlive) |
 | `com.empire.orion.data-quality.plist` | `scripts/run_data_quality_native.sh` | `orion.main_data_quality --scheduled` — RB.4 data-quality loop (KeepAlive) |
 | `com.empire.orion.launchd-health.plist` | `scripts/run_launchd_health_probe.sh` | Once-per-minute audit of all `com.empire.orion.*` jobs |
 | `com.empire.orion.market-open-dataflow-check.plist` | `scripts/run_market_open_dataflow_check.sh` | Bronze-freshness guard a few minutes after the cash open |
 | `com.empire.orion.deadman.plist` | `scripts/run_deadman_watchdog.sh` | Every-5-min dead-man watchdog — service-liveness absence + pipeline-depth stage freshness (calendar-aware) |
+| `com.empire.orion.log-rotation.plist` | `scripts/rotate_native_logs.sh` | Daily bounded rotation for native/launchd redirect logs |
 | `com.empire.orion.orphan-close.plist.DISABLED-260526` | inline bash | **Disabled.** One-shot orphan-position closer; preserved as a reference (see [Orphan-close history](#orphan-close-history)) |
 
 ### Install / status / stop
 
 ```bash
-# Install (idempotent)
+# Initial install
 mkdir -p /Users/jacobmcmillan/Empire/Orion/logs
-cp scripts/launchd/com.empire.orion.execution.plist        ~/Library/LaunchAgents/
-cp scripts/launchd/com.empire.orion.ingestion.plist        ~/Library/LaunchAgents/
-cp scripts/launchd/com.empire.orion.launchd-health.plist   ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.execution.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.ingestion.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.launchd-health.plist
+for job in execution ingestion position-monitor data-quality launchd-health deadman market-open-dataflow-check log-rotation; do
+  cp "scripts/launchd/com.empire.orion.${job}.plist" ~/Library/LaunchAgents/
+  launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.empire.orion.${job}.plist"
+done
 
 # Status (exit code, restart counter, last exit reason)
-launchctl print gui/$(id -u)/com.empire.orion.execution
-launchctl print gui/$(id -u)/com.empire.orion.ingestion
-launchctl print gui/$(id -u)/com.empire.orion.launchd-health
+launchctl list | rg 'com\.empire\.orion'
 
 # Restart safely (SIGKILLs python, KeepAlive restarts within ThrottleInterval=30s)
 launchctl kickstart -k gui/$(id -u)/com.empire.orion.execution
 launchctl kickstart -k gui/$(id -u)/com.empire.orion.ingestion
+launchctl kickstart -k gui/$(id -u)/com.empire.orion.position-monitor
+launchctl kickstart -k gui/$(id -u)/com.empire.orion.data-quality
 
 # Stop / uninstall
-launchctl bootout gui/$(id -u)/com.empire.orion.execution
-launchctl bootout gui/$(id -u)/com.empire.orion.ingestion
-launchctl bootout gui/$(id -u)/com.empire.orion.launchd-health
+for job in execution ingestion position-monitor data-quality launchd-health deadman market-open-dataflow-check log-rotation; do
+  launchctl bootout "gui/$(id -u)/com.empire.orion.${job}"
+done
 ```
 
 ### Why the wrappers `exec` python directly
@@ -118,68 +110,13 @@ logs/ingestion_native.stderr.log
 logs/launchd_health.log               # alert rows, JSON one per line
 logs/launchd_health.stdout.log
 logs/launchd_health.stderr.log
+logs/log_rotation.stdout.log           # daily native-log rotation results
+logs/log_rotation.stderr.log
 logs/orphan_close.log                 # populated only when orphan plist fires
 ```
 
 Tail the structured log first; only fall back to stdout/stderr when something
 crashed before logger init.
-
-## Meta-search & meta-weekly (native)
-
-`com.empire.orion.meta-search` and `com.empire.orion.meta-weekly` are the
-production schedulers for solver evolution. They replace the Docker
-`meta-search` / `meta-weekly` services, which sat behind the `scheduled`
-compose profile that was never brought up — so meta-search had **no**
-production scheduler before this (see
-`proposals/2026-06-10-eod-meta-diagnosis.md`).
-
-Both are **long-running KeepAlive daemons**, not `StartCalendarInterval`
-one-shots. `main_meta.py --scheduled` and `main_meta_weekly.py --scheduled`
-each run an internal 60-second poll loop that self-fires at a fixed time and
-otherwise sleeps:
-
-- **meta-search** — daily, 18:00 ET on weekdays. Evolves the base solver
-  (`ORION_META_BASE_SOLVER`, default `diversified_baseline_v1`).
-- **meta-weekly** — Friday 17:30 ET. Runs the weekly evolution, then a solver
-  promotion sweep. The fire time is hard-coded in `run_scheduled()`; the plist
-  intentionally imposes no calendar time of its own (that would fight the
-  in-process scheduler).
-
-Because the process owns its schedule, launchd's only job is to keep the loop
-alive across reboots/crashes — exactly like `execution`/`ingestion`. Both are
-therefore in the launchd-health probe's `REQUIRED_LABELS`: a missing row means
-the scheduler loop is dead and the next fire silently never happens.
-
-Each fire posts a **Discord notification** (via `orion.shared.alerts`):
-a success summary (experiments / reports analyzed, mutations applied, solvers
-promoted) or a failure with the exception class. Configure the webhook with
-`ORION_DISCORD_WEBHOOK_URL`; absent it, the alert no-ops and the run still logs
-normally.
-
-```bash
-# Install + load
-cp scripts/launchd/com.empire.orion.meta-search.plist  ~/Library/LaunchAgents/
-cp scripts/launchd/com.empire.orion.meta-weekly.plist  ~/Library/LaunchAgents/
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.meta-search.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.empire.orion.meta-weekly.plist
-
-# Verify (PID present, LastExitStatus 0 — not 127)
-launchctl list | grep -E 'com.empire.orion.meta'
-
-# Disable / uninstall
-launchctl bootout gui/$(id -u)/com.empire.orion.meta-search
-launchctl bootout gui/$(id -u)/com.empire.orion.meta-weekly
-rm ~/Library/LaunchAgents/com.empire.orion.meta-search.plist
-rm ~/Library/LaunchAgents/com.empire.orion.meta-weekly.plist
-```
-
-> After `bootout`, both labels are removed from `REQUIRED_LABELS`' expected
-> set only in code — if you disable them but leave `REQUIRED_LABELS` unchanged,
-> the health probe will fire a CRITICAL "not loaded" alert every minute. Disable
-> the daemons and the `REQUIRED_LABELS` entries together, or leave them loaded.
-
-Logs: `logs/meta_search_native.log` / `logs/meta_weekly_native.log` (structured),
-plus the launchd-captured `*.stdout.log` / `*.stderr.log`.
 
 ## Launchd health probe
 
@@ -200,15 +137,25 @@ The probe exists because of the 2026-05-22 incident
 ([below](#orphan-close-history)) — a silent exit-127 loop went unnoticed for
 4.5 hours.
 
+To verify delivery without waiting for a real fault, run the explicit test
+fire. It sends one synthetic message and exits non-zero if Discord rejects it:
+
+```bash
+uv run python -m orion.jobs.launchd_health_probe --test-fire
+```
+
 ## Dead-man watchdog (unified liveness)
 
 `com.empire.orion.deadman` runs every 5 minutes (`StartInterval=300`, plus
 `RunAtLoad` for an immediate first pass) and is the **unified absence guard**.
-It performs two independent checks:
+It performs three independent checks:
 
-1. **Service liveness (always-on).** Each long-running service
+1. **Global circuit breaker (always-on).** A latched breaker gets its own alert
+   before any other checks run, including outside market hours.
+
+2. **Service liveness.** Each publishing service
    (`ingestion`, `execution`, `position_monitor`, `feature_enrichment`,
-   `meta_search`, `meta_weekly`, `eod_agent`) upserts a row into the
+   `reconcile_pnl`) upserts a row into the
    `service_liveness` table at the end of every successful work cycle via
    `orion.shared.liveness.publish_liveness` — advancing `last_success_ts_utc`,
    incrementing `cycle_count`, and recording its own declared
@@ -218,12 +165,11 @@ It performs two independent checks:
    watchdog has never seen is never alerted on** — registration happens on
    first publish, so absence it cannot attribute stays silent.
 
-2. **Pipeline-depth stage freshness (NYSE-session-gated, REAL data).** During a
+3. **Pipeline-depth stage freshness (NYSE-session-gated, REAL data).** During a
    live NYSE regular session it asserts per-stage freshness on the actual
-   pipeline tables — `max(bronze_events.received_ts_utc)` (budget 300s),
-   `max(silver_signals.created_at_utc)` (600s),
-   `max(gold_feature_events.created_at_utc)` (1200s) — and logs today's
-   `candidate_trades` count (informational only, never an alert). This catches
+   pipeline tables — `max(bronze_events.received_ts_utc)` (budget 300s) and
+   `max(silver_signals.created_at_utc)` (600s). Gold-feature freshness and
+   today's `candidate_trades` count are informational only. This catches
    every stall class in the incident history (redis flap, gold-poller OOM,
    born-stale, WS death) with **zero contamination risk**: no synthetic events
    are ever injected. The session gate is **calendar-aware**
@@ -231,7 +177,7 @@ It performs two independent checks:
    and early closes suppress the stage checks — this is what fixed the overnight
    false-alert that got the watchdog booted out on 2026-06-11. Outside a live
    session the stage checks are informational only; service-liveness checks
-   (#1) still run.
+   (#1 and #2) still run.
 
 The job runs in a **separate process with its own lightweight async engine**, so
 it still reads liveness/pipeline state even when the main stack is wedged. It is
@@ -263,26 +209,16 @@ scripts/run_deadman_watchdog.sh
 # Database only (Postgres 16 + pgvector)
 docker compose up timescaledb -d
 
-# Default profile — stateless support services only:
-# timescaledb, feature_enrichment, pattern-miner, indexer, mcp-server, heber-sync.
-# The trading/scheduling roles (ingestion, execution, meta-search, meta-weekly,
-# position-monitor, data-quality) run NATIVE via launchd and are NOT here.
+# Default profile — support services only:
+# timescaledb, feature_enrichment, heber-sync.
+# The trading roles (ingestion, execution, position-monitor, data-quality)
+# run NATIVE via launchd and are NOT here.
 docker compose up -d
 
-# Profile-gated docker copies of the native roles + the retired eod-agent.
+# Profile-gated docker copies of the native roles.
 # Use only for escalation/fallback when the native runner is down; the service
 # leases prevent co-execution with the native instance.
 docker compose --profile docker up -d
-
-# Include legacy labeling profile (nightly-backfill, quality-guardrails,
-# option_quote_tracker)
-docker compose --profile legacy-labels up -d
-
-# Include meta-search profile
-docker compose --profile tools up -d
-
-# Scheduled jobs (meta-weekly, daily-dashboard-reset)
-docker compose --profile scheduled up -d
 
 # Logs
 docker compose logs -f execution

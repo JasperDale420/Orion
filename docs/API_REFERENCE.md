@@ -60,7 +60,7 @@ Parameters:
 
 #### `GET /experiments`
 
-Description: List meta-search experiments.
+Description: List retained historical experiment records.
 
 ### Promotions
 
@@ -83,11 +83,6 @@ Parameters:
 - `reviewed_by` (query, required)
 
 ### Search & Market Data
-
-#### `GET /search`
-
-Description: RAG/hybrid search endpoint with metadata filters.
-Returns `503` when the vector store or embedding backend is unavailable.
 
 #### `GET /events/{event_id}`
 
