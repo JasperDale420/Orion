@@ -52,6 +52,10 @@ SOFT_WRAPPERS: list[str] = []
 ALL_WRAPPERS = HARD_EXIT_WRAPPERS + SOFT_WRAPPERS + ["run_launchd_health_probe.sh"]
 
 
+def test_retired_orphan_close_plist_is_not_installable_by_glob() -> None:
+    assert not (SCRIPTS_DIR / "launchd" / "com.empire.orion.orphan-close.plist").exists()
+
+
 def _harness(wrapper_name: str, tmp_path: Path) -> Path:
     """Copy a wrapper into ``tmp_path``, repoint PROJECT_ROOT at it, neutralise
     ``uv sync``, and replace the final ``exec ... python/uv ...`` with a sentinel

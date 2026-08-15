@@ -188,13 +188,12 @@ class IngestionService:
         await init_db()
         self._lease_run_id = await acquire_service_lease("ingestion")
 
-        if system_settings.reset_circuit_breaker_on_start:
-            try:
-                from orion.core.circuit_breaker import CircuitBreaker
-
-                await CircuitBreaker().close()
-            except Exception as cb_err:
-                logger.error(f"Failed to reset circuit breaker on start: {cb_err}", exc_info=True)
+        # Startup deliberately does NOT touch the global circuit breaker. It
+        # latches so that a human looks at whatever tripped it, and a restart is
+        # not a human looking at it — auto-closing here would have re-armed
+        # order flow after a drawdown kill switch or a manual halt. The startup
+        # false positive that motivated the old escape hatch is fixed at source
+        # in `run()`, where the heartbeat clock now starts.
 
         # required=True: a startup hydrate failure must NOT silently fall through
         # to a static-watchlist-only session (2026-06-01 near-outage). Fail loud
@@ -255,6 +254,18 @@ class IngestionService:
     async def run(self) -> None:
         await self.initialize()
         self._handle_shutdown_signals()
+
+        # Start the heartbeat clock HERE, on loop entry. HealthMonitor stamps it
+        # at construction, which is before `initialize()` spends several minutes
+        # hydrating the universe and the feature-engine history — so the first
+        # `check_health()` measured startup as a liveness gap and tripped the
+        # global circuit breaker, which has no auto-reset and latched (2026-08-13:
+        # "Heartbeat missing for 425.76s > 60.0s", 21h of blocked order flow).
+        # The gap must be measured from when the loop began, not when the object
+        # was built. The market-closed path reaches `check_health()` via
+        # `_check_overnight_sleep -> _maybe_run_eod` before `_run_cycle` bumps
+        # the heartbeat itself, so this cannot be deferred into the cycle.
+        self.health_monitor.update_heartbeat()
 
         logger.info("Starting Polling Loop. Interval: 60s")
         loop_interval = 60.0
@@ -918,7 +929,7 @@ class IngestionService:
                 str(payload.get(k, ""))
                 for k in ("ticker", "ts_event", "executed_at", "premium", "put_call", "strike", "expiry", "volume")
             )
-            event_id = f"uwflow_{hashlib.sha1(basis.encode()).hexdigest()}"
+            event_id = f"uwflow_{hashlib.sha1(basis.encode(), usedforsecurity=False).hexdigest()}"
 
         # Extract event timestamp before it was converted to ISO string
         ts_event_raw = raw.get("ts_event")
@@ -1208,7 +1219,7 @@ class IngestionService:
         return True
 
     async def _post_flow_parity_summary(self) -> None:
-        """Aggregate the day's flow_push_parity rows and post a Discord summary.
+        """Aggregate daily flow-push parity; log GREEN and page only RED.
 
         Reports total push vs poll counts, total missed-by-push (the cutover
         gate, excluding the uwflow_* unmatchable class), median latency
@@ -1245,14 +1256,16 @@ class IngestionService:
             verdict = "GREEN" if green else "RED"
             latency_str = f"{latency_avg:.1f}s" if latency_avg is not None else "n/a"
 
-            await send_discord_alert(
+            summary = (
                 f"Flow-push shadow parity ({verdict}) — cycles={cycles}, "
                 f"push={int(push_total)}, poll={int(poll_total)}, "
                 f"missed_by_push={true_missed} (unmatchable={int(unmatchable_total)}), "
                 f"median_latency_improvement={latency_str}, "
-                f"reconcile_window={int(window_s or 0)}s",
-                dedupe_key="flow_push_parity_daily",
+                f"reconcile_window={int(window_s or 0)}s"
             )
+            logger.info("flow_push_parity_summary", verdict=verdict, summary=summary)
+            if not green:
+                await send_discord_alert(summary, dedupe_key="flow_push_parity_daily")
         except Exception as e:
             logger.error(f"flow_push_parity summary failed: {e}", exc_info=True)
 

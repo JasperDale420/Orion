@@ -389,6 +389,7 @@ class ExecutionEngine:
         # Data Gateway trading client (lazy-initialized via _get_gateway_client)
         self._gateway_client: Any = None
         self._gateway_available = False
+        self._gateway_positions_snapshot: dict[str, dict[str, float]] | None = None
         # Lazy: set on first _check_gateway_available / market-open check.
         self._gateway_check_ts: datetime | None = None
         self._market_schedule: Any = None
@@ -481,6 +482,13 @@ class ExecutionEngine:
 
             self._gateway_client = get_gateway_trading_client()
         return self._gateway_client
+
+    @property
+    def gateway_positions_snapshot(self) -> dict[str, dict[str, float]] | None:
+        """Latest successfully synchronized Orion-owned broker positions."""
+        if self._gateway_positions_snapshot is None:
+            return None
+        return {symbol: dict(position) for symbol, position in self._gateway_positions_snapshot.items()}
 
     # Close is a critical path — a transient Gateway blip must not abandon an
     # exit for a full monitor cycle. The close path retries a fresh
@@ -897,6 +905,11 @@ class ExecutionEngine:
             self.risk_manager.open_positions = len(
                 [p for p in self.risk_manager.positions.values() if abs(p["qty"]) > 1e-9]
             )
+            self._gateway_positions_snapshot = {
+                symbol: dict(position)
+                for symbol, position in self.risk_manager.positions.items()
+                if abs(position["qty"]) > 1e-9
+            }
             logger.info(
                 "Positions synced from Gateway (Orion-only)",
                 extra={
@@ -2262,12 +2275,20 @@ class ExecutionEngine:
                 safe = False
                 continue
             # Cancel accepted → drop it from risk pending exposure.
-            remove = getattr(self.risk_manager, "remove_pending_order", None)
-            if remove is not None:
-                try:
-                    await remove(coid)
-                except Exception:
-                    pass
+            try:
+                await self._remove_pending_order_compat(coid)
+            except Exception as exc:
+                # The broker cancel is already accepted, so never trap a
+                # risk-reducing close on local bookkeeping. Keep the drift loud
+                # so the next reconciliation can repair it.
+                logger.error(
+                    "resting_order_pending_cleanup_failed",
+                    ticker=ticker,
+                    order_id=str(order_id),
+                    client_order_id=coid,
+                    error=str(exc),
+                    exc_info=True,
+                )
             logger.info(
                 f"Cancelled resting Orion order {order_id} on {ticker} before close",
                 extra={"event_type": "EXIT_CANCEL_RESTING", "ticker": ticker, "order_id": str(order_id)},

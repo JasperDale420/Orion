@@ -6,6 +6,7 @@ os.environ["DB_URL"] = "sqlite+aiosqlite:///:memory:"
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -13,6 +14,7 @@ from orion.jobs.bucket_metrics import (
     HALT_TRAILING_WINDOW,
     GroupStats,
     compute_bucket_metrics,
+    run_bucket_metrics,
 )
 from orion.storage.db import async_session_factory, init_db
 from orion.storage.models_gold import CandidateTrade, ExitDecision
@@ -181,3 +183,61 @@ def test_verdicts_follow_sample_size_discipline():
     for _ in range(5):
         tiny.add(100.0, 5.0, "profit_target_v1")
     assert tiny.summary()["verdict"] == "collecting"
+
+
+@pytest.mark.asyncio
+async def test_routine_metrics_are_logged_without_discord_page():
+    metrics = {
+        "window_days": 30,
+        "closed_trades": 5,
+        "by_bucket": {
+            "SWING": {
+                "n": 5,
+                "win_rate": 0.4,
+                "expectancy": -2.0,
+                "profit_factor": 0.9,
+                "avg_hold_hours": 12.0,
+                "exit_reason_mix": {"stop_loss_v1": 3},
+                "verdict": "collecting",
+            }
+        },
+        "by_rule": {},
+    }
+    sent = AsyncMock(return_value=True)
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=metrics)),
+        patch("orion.shared.alerts.send_discord_alert", sent),
+    ):
+        assert await run_bucket_metrics() == metrics
+
+    sent.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_actionable_metrics_still_page_discord():
+    metrics = {
+        "window_days": 30,
+        "closed_trades": 100,
+        "by_bucket": {
+            "SWING": {
+                "n": 100,
+                "win_rate": 0.2,
+                "expectancy": -20.0,
+                "profit_factor": 0.5,
+                "avg_hold_hours": 12.0,
+                "exit_reason_mix": {"stop_loss_v1": 80},
+                "verdict": "consider_halting",
+            }
+        },
+        "by_rule": {},
+    }
+    sent = AsyncMock(return_value=True)
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=metrics)),
+        patch("orion.shared.alerts.send_discord_alert", sent),
+    ):
+        await run_bucket_metrics()
+
+    sent.assert_awaited_once()

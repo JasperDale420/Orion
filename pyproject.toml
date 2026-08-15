@@ -120,7 +120,7 @@ ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
 plugins = ["pydantic.mypy"]
-exclude = "(^archive/|^scripts/|^tests/|^alembic/)"
+exclude = "(^archive/|^scripts/|^tests/|^alembic/|^ci/)"
 follow_imports = "skip"
 
 # Type-checking tiers (later override wins on overlap):

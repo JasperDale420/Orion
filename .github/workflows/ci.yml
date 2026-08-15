@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "deploy/orion-recovery" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "master", "deploy/orion-recovery" ]
 
 env:
   # setup-uv ships a Node 20 JS action; GitHub now warns Node 20 is deprecated.

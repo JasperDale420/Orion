@@ -129,12 +129,24 @@ class TestClassifyEntry:
         entry = LaunchctlEntry(pid=None, exit_code=1, label="com.empire.orion.execution")
         assert classify_entry(entry).severity is Severity.WARNING
 
-    def test_running_with_nonzero_last_exit_is_warning(self) -> None:
-        # KeepAlive jobs may show a non-zero last-exit even while currently
-        # running (PID present) — we still want visibility because it means
-        # the job is flapping.
+    def test_running_with_nonzero_last_exit_is_ok(self) -> None:
+        # launchctl keeps the prior exit status after KeepAlive restarts a job.
+        # A current PID means the service is running; liveness handles wedges.
         entry = LaunchctlEntry(pid=50960, exit_code=129, label="com.empire.orion.execution")
-        assert classify_entry(entry).severity is Severity.WARNING
+        assert classify_entry(entry).severity is Severity.OK
+
+    @pytest.mark.parametrize(
+        "label",
+        [
+            "com.empire.orion.deadman",
+            "com.empire.orion.market-open-dataflow-check",
+        ],
+    )
+    def test_self_reporting_check_exit_two_is_ok(self, label: str) -> None:
+        # These checks return 2 after dispatching their own alert. Re-alerting
+        # on that status duplicates the same incident through this probe.
+        entry = LaunchctlEntry(pid=None, exit_code=2, label=label)
+        assert classify_entry(entry).severity is Severity.OK
 
 
 class TestEvaluateOrionJobs:
@@ -170,7 +182,7 @@ class TestEvaluateOrionJobs:
     def test_multiple_alerts_returned_in_input_order(self) -> None:
         entries = [
             LaunchctlEntry(pid=None, exit_code=127, label="com.empire.orion.orphan-close"),
-            LaunchctlEntry(pid=50960, exit_code=1, label="com.empire.orion.execution"),
+            LaunchctlEntry(pid=None, exit_code=1, label="com.empire.orion.execution"),
         ]
         alerts = evaluate_orion_jobs(entries)
         assert [a.label for a in alerts] == [

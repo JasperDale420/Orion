@@ -120,6 +120,15 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
         await execution_engine.initialize()
         await signal_engine.initialize()
         await position_manager.initialize()
+        broker_positions = execution_engine.gateway_positions_snapshot
+        position_manager_exits_ready = broker_positions is not None
+        if broker_positions is not None:
+            position_manager.reconcile_with_broker_positions(broker_positions)
+        else:
+            logger.warning(
+                "Rule-based exits waiting for a confirmed Gateway position snapshot",
+                extra={"event_type": "POSITION_MANAGER_BROKER_RECONCILE_DEFERRED"},
+            )
     finally:
         startup_liveness_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -251,7 +260,14 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
 
         # Position Manager: Check exit rules for open positions
         try:
-            for position in position_manager.get_open_positions():
+            if not position_manager_exits_ready:
+                broker_positions = execution_engine.gateway_positions_snapshot
+                if broker_positions is not None:
+                    position_manager.reconcile_with_broker_positions(broker_positions)
+                    position_manager_exits_ready = True
+
+            positions_for_exit_rules = position_manager.get_open_positions() if position_manager_exits_ready else ()
+            for position in positions_for_exit_rules:
                 if not _should_apply_options_exit_rules(position):
                     logger.debug(
                         f"Skipping options exit rules for non-option position: {position.ticker}",

@@ -200,7 +200,7 @@ class TestRenewServiceLease:
 
     async def test_renew_swallows_db_errors(self) -> None:
         """A transient DB failure during renewal must not crash the main loop."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import MagicMock, patch
 
         engine = ExecutionEngine()
         engine._lease_service_id = "phantom"
@@ -208,7 +208,8 @@ class TestRenewServiceLease:
 
         # Lease logic now lives in orion.core.service_lease; ExecutionEngine
         # delegates. Patch the session factory at its actual call site.
-        fake_factory = AsyncMock(side_effect=RuntimeError("simulated DB failure"))
+        fake_factory = MagicMock()
+        fake_factory.return_value.__aenter__.side_effect = RuntimeError("simulated DB failure")
         with patch("orion.core.service_lease.async_session_factory", fake_factory):
             # Should not raise
             await engine.renew_service_lease()

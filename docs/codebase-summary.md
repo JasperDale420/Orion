@@ -8,16 +8,10 @@ unless noted. For the runtime data flow that ties these together, see
 
 | Module | Role | Run by |
 |---|---|---|
-| `main_execution.py` | Signal → preflight → order submission loop | launchd `com.empire.orion.execution` + `docker compose up execution` |
+| `main_execution.py` | Signal → preflight → order submission loop | launchd `com.empire.orion.execution`; Docker fallback via profile `docker` |
 | `main_feature_enrichment.py` | Silver → Gold features | docker compose `feature_enrichment` |
-| `main_position_monitor.py` | Continuous exit-rule evaluation on open positions | docker compose `position-monitor` |
-| `main_eod.py` | LLM-driven end-of-day review | docker compose `eod-agent` |
-| `main_meta.py` | Solver evolution (LLM mutation + backtest) | `tools` profile only |
-| `main_meta_weekly.py` | Weekly meta-aggregator | `scheduled` profile |
-| `main_data_quality.py` | Standalone data-quality probe | ad-hoc |
-| `main_option_quote_tracker.py` | Snapshot option quotes for labeling | `legacy-labels` profile |
-| `main_pattern_miner.py` | Mine darkpool / flow patterns | `legacy-labels` profile |
-| `main_price_target_labeler.py` | Triple-barrier label producer — **archived 2026-06-10** (`archive/2026-06-10_price-target-labeler/`); live feature-extraction helpers moved to `orion.labeler.feature_extraction` | removed |
+| `main_position_monitor.py` | Continuous exit-rule evaluation on open positions | launchd `com.empire.orion.position-monitor`; Docker fallback via profile `docker` |
+| `main_data_quality.py` | Scheduled data-quality probe | launchd `com.empire.orion.data-quality`; Docker fallback via profile `docker` |
 
 Ingestion has its own `python -m orion.ingestion` entrypoint
 (`ingestion/__main__.py`), run natively by `com.empire.orion.ingestion` and
@@ -27,20 +21,18 @@ in Docker by the `ingestion` service.
 
 | Package | Purpose |
 |---|---|
-| `api/` | FastAPI admin API — solvers, metrics, experiments, flows, rollups, dashboard, RAG search. See [`api-reference.md`](api-reference.md). Auth via `x-api-key` (`ORION_API_KEY`). |
-| `agents/` | LLM agents: EOD review, MetaSearch (solver DNA evolution), weekly aggregator. |
+| `api/` | FastAPI admin API — solvers, metrics, retained experiment records, flows, rollups, dashboard, and circuit-breaker controls. See [`api-reference.md`](api-reference.md). Auth via `x-api-key` (`ORION_API_KEY`). |
 | `analysis/` | Multi-axis regime detection (vol/vix/trend/risk/session), cross-validation, evaluation metrics. |
-| `clients/` | `HeberReader` (parquet, predicate-pushdown, negative-cache for empty Gold datasets (300s TTL), single-threaded reads for SIGABRT safety), `GatewayTradingClient` (Alpaca proxy), TradingRAG client, MCP server. |
+| `clients/` | `HeberReader` (parquet, predicate-pushdown, negative-cache for empty Gold datasets (300s TTL), single-threaded reads for SIGABRT safety) and `GatewayTradingClient` (Alpaca proxy). |
 | `connectors/` | `GatewayStreamClient` (WebSocket bars/quotes), UW connectors: greek exposure, IV rank, market tide, max pain, VIX proxy. |
-| `core/` | Circuit breaker, feature flags, solver DSL/router/validation, universe manager, health monitor, PnL tracker, service-lease guard, market schedule, drift trigger, promotion rules. |
+| `core/` | Circuit breaker, solver DSL/router/validation, universe manager, health monitor, PnL tracker, service-lease guard, market schedule, and promotion rules. |
 | `enrichment/` | Helpers for feature-enrichment job. |
 | `execution/` | Execution engine, risk subpackage, position manager/monitor, rate limiter, correlation adjuster, signal preflight, fill processor, attribution. **Safety-critical.** |
 | `ingestion/` | Real-time WS ingestion service (Gateway WS → Bronze → Silver → candidates). |
-| `jobs/` | Scheduled jobs: nightly backfill, quality guardrails, DLQ consumer, data-quality checker, Gateway contract probe, meta loop, daily dashboard reset, launchd health probe (exit-127 monitoring), feature validation (130+ ML feature spot-check and audit). |
+| `jobs/` | Operational jobs: close-of-books reconciliation and bucket metrics, backfills, quality checks, DLQ handling, Gateway probes, dead-man/launchd health, daily dashboard reset, rollups, and feature validation. |
 | `labeler/` | Triple-barrier labeling: checkpoint, greeks, schema guard. |
-| `ml/` | LightGBM scorer, exit classifier, drift monitor, feature store, pattern miner, model registry, darkpool features. |
+| `ml/` | LightGBM scorer, exit classifier, feature store, model registry, and derived/darkpool features. |
 | `processing/` | FeatureEngine, SignalEngine, RuleEngine, backtest engine, normalizer, rollup builder, deduper. |
-| `rag/` | Embeddings, pgvector store, indexer (trade-knowledge RAG). |
 | `shared/` | `setup_struct_logger`, Prometheus metrics, DB utils, decorators, DLQ utils. |
 | `storage/` | SQLAlchemy ORM models, async engine/session, lakehouse writer, watermark store. |
 | `scripts/` | Repo-internal utility scripts (note: top-level `scripts/` is the operator-facing set; see [`deployment-guide.md`](deployment-guide.md)). |
@@ -49,8 +41,8 @@ in Docker by the `ingestion` service.
 
 When onboarding, read these in order to understand the loop:
 
-1. **`config.py`** — All four Settings classes (`SystemSettings`, `RiskSettings`,
-   `MetaSearchSettings`, `AgentSettings`). Single source of truth for env-vars;
+1. **`config.py`** — The three Settings classes (`SystemSettings`, `RiskSettings`,
+   `HeuristicWeights`). Single source of truth for env-vars;
    see [`configuration-guide.md`](configuration-guide.md).
 2. **`ingestion/service.py`** — Long-running ingestion loop. Acquires
    `service_lease_ingestion`, drains Gateway WS, writes Bronze, normalizes,
@@ -81,15 +73,18 @@ When onboarding, read these in order to understand the loop:
 - **Errors:** `core/errors.py` defines `OrionError(EmpireError)` and subclasses
   `ProviderError`, `StorageError`, `ExecutionError`, `ModelInferenceError`,
   `FeatureComputationError`. Error codes in `ErrorCode` enum.
-- **HTTP:** wrap Gateway calls with `core.http_client` (`empire_core` shim) so
-  retries + structured error logs are consistent.
+- **HTTP:** use `empire_core.http_client` so retries and structured error logs
+  stay consistent.
 - **DB:** `storage/db.py` exposes `async_session()` and `configure_db()`. Async
   engine uses `pool_pre_ping=True`, `pool_recycle=1800`,
   `expire_on_commit=False`. pgvector enabled at init.
-- **Launchd health:** `jobs/launchd_health_probe.py` monitors all Orion launchd agents at a 5-min cadence. Detects exit 127 (wrong `uv` path / bad ProgramArguments) and missing required labels (execution, ingestion, meta-search, meta-weekly, position-monitor, data-quality). Alerts via Discord with 1-hour dedup window per (label, exit_code) pair. Run by: `com.empire.orion.launchd-health`.
+- **Launchd health:** `jobs/launchd_health_probe.py` runs every minute. It detects
+  exit 127 and missing required daemons (execution, ingestion, position-monitor,
+  data-quality), with a one-hour Discord dedupe window per `(label, exit_code)`.
+  Run by `com.empire.orion.launchd-health`.
 - **Service lease:** `core/service_lease.py` is Orion's single-instance guard.
   Each long-running entrypoint (`ingestion`, `main_execution`,
-  `main_position_monitor`) claims a row in `SystemStatus` keyed by
+  `main_position_monitor`, `main_data_quality`) claims a row in `SystemStatus` keyed by
   `ORION_LEASE_OWNER_ID` (TTL `SERVICE_LEASE_STALE_SECONDS=120`). This is what
   prevents the native (`*_native`) and docker (`*_compose`) versions from
   trampling each other.
@@ -100,7 +95,7 @@ When onboarding, read these in order to understand the loop:
 |---|---|
 | `pyproject.toml` | uv-managed; `name = "orion"`; pkg lives at `src/orion`. Defines pytest markers (`unit`, `integration`, `e2e`, `slow`), strict-mypy overrides, ruff config (extends `ruff-base.toml`). |
 | `Makefile` | Wraps common targets. |
-| `docker-compose.yml` | Profiles: default, `legacy-labels`, `tools`, `scheduled`. |
+| `docker-compose.yml` | Default support services plus profile-gated `docker` copies of the four native roles. |
 | `Dockerfile` | Production image. |
 | `alembic.ini` + `alembic/` | DB migrations. |
 | `config/regime_risk.yaml` | Regime → risk-multiplier mapping. |

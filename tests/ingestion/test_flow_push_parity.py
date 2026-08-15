@@ -12,6 +12,7 @@ the autouse in-memory SQLite DB.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -105,6 +106,46 @@ async def _latest_parity_row():
 
     async with async_session_factory() as session:
         return (await session.execute(select(FlowPushParity).order_by(desc(FlowPushParity.id)).limit(1))).scalar_one()
+
+
+async def _add_parity_summary_row(*, missed_by_push: int, latency: float | None) -> None:
+    from orion.storage.models_flow_parity import FlowPushParity
+
+    async with async_session_factory() as session:
+        session.add(
+            FlowPushParity(
+                cycle_ts_utc=datetime.now(UTC),
+                push_count=10,
+                poll_count=10,
+                matched_count=10 - missed_by_push,
+                missed_by_push_count=missed_by_push,
+                missed_by_poll_count=0,
+                parity_unmatchable_count=0,
+                median_latency_improvement_s=latency,
+                window_seconds=900,
+            )
+        )
+        await session.commit()
+
+
+async def test_green_daily_parity_summary_does_not_page() -> None:
+    await _add_parity_summary_row(missed_by_push=0, latency=2.0)
+    sent = AsyncMock(return_value=True)
+
+    with patch("orion.ingestion.service.send_discord_alert", sent):
+        await _make_service()._post_flow_parity_summary()
+
+    sent.assert_not_awaited()
+
+
+async def test_red_daily_parity_summary_still_pages() -> None:
+    await _add_parity_summary_row(missed_by_push=1, latency=2.0)
+    sent = AsyncMock(return_value=True)
+
+    with patch("orion.ingestion.service.send_discord_alert", sent):
+        await _make_service()._post_flow_parity_summary()
+
+    sent.assert_awaited_once()
 
 
 async def test_lagged_poll_counts_matched_not_missed(monkeypatch):

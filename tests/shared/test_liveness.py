@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -56,7 +57,11 @@ async def test_publish_records_and_clears_last_error():
     row = await _fetch("feature_enrichment")
     assert row is not None
     success_ts = row.last_success_ts_utc
+    success_updated_at = row.updated_at
 
+    # Force a distinct wall-clock tick so a regression that stops advancing
+    # updated_at can't hide behind an equal-timestamp `>=`.
+    await asyncio.sleep(0.01)
     await publish_liveness("feature_enrichment", cadence_budget_seconds=900, error="connector timeout")
     row = await _fetch("feature_enrichment")
     assert row is not None
@@ -64,6 +69,10 @@ async def test_publish_records_and_clears_last_error():
     # The error did NOT advance the heartbeat.
     assert row.cycle_count == 1
     assert row.last_success_ts_utc == success_ts
+    # But updated_at DOES advance on an error-only publish (deadman_watchdog's
+    # retired-service reactivation check relies on this: a redeploy that fails
+    # before its first success must still be detectable as "recently touched").
+    assert row.updated_at > success_updated_at
 
     # A subsequent healthy cycle clears the error back to NULL and advances.
     await publish_liveness("feature_enrichment", cadence_budget_seconds=900)

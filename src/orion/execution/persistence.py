@@ -59,8 +59,10 @@ async def is_fill_processed(order_id: str) -> bool:
 
         return await db_query(check_fill)
     except Exception as e:
-        logger.error(f"Failed to check processed fills for {order_id}: {e}")
-        return False  # Fail safe — assume not processed to avoid skipping fills
+        logger.error(f"Failed to check processed fills for {order_id}: {e}", exc_info=True)
+        # Unknown is not "unprocessed": processing against an unavailable
+        # idempotency ledger can double-count P&L after a restart.
+        raise
 
 
 @db_retry
@@ -84,7 +86,8 @@ async def mark_fill_processed(
     try:
         await db_write(mark_fill)
     except Exception as e:
-        logger.error(f"Failed to mark fill {order_id} as processed: {e}")
+        logger.error(f"Failed to mark fill {order_id} as processed: {e}", exc_info=True)
+        raise
 
 
 async def has_processed_fill_for_order(broker_order_id: str) -> bool:
@@ -473,7 +476,14 @@ async def persist_fill_record(fill: Any) -> None:
     try:
         await db_write(save_fill_and_update_journal)
     except Exception as e:
-        logger.error("Failed to persist fill record", extra={"event_type": "FILL_PERSIST_ERROR", "error": str(e)})
+        logger.error(
+            "Failed to persist fill record",
+            extra={"event_type": "FILL_PERSIST_ERROR", "error": str(e)},
+            exc_info=True,
+        )
+        # The processed-fill marker is written after this call. Propagating
+        # keeps a failed fill write from being permanently marked complete.
+        raise
 
 
 async def persist_realized_pnl_to_journal(

@@ -5,7 +5,6 @@ Scores every flow event with a trained LightGBM model.
 Supports bucket-specific models (0DTE, SHORT_SWING, SWING, POSITION).
 """
 
-import pickle
 import time
 from datetime import UTC
 from typing import Any
@@ -14,6 +13,7 @@ import numpy as np
 
 from orion.config import system_settings
 from orion.ml.feature_config import CATEGORICAL_COLUMNS
+from orion.ml.model_loading import load_compatible_pickle
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.scorer")
@@ -165,8 +165,7 @@ class MLScorer:
                     )
 
                 try:
-                    with open(model_path, "rb") as f:
-                        model_data = pickle.load(f)  # noqa: S301
+                    model_data = load_compatible_pickle(model_path)
 
                     self.models[bucket] = model_data
                     self.feature_names[bucket] = model_data.get("feature_names", [])
