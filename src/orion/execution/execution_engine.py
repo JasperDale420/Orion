@@ -19,6 +19,7 @@ from orion.execution.attribution import (
     orion_order_id_sql_pattern,
 )
 from orion.execution.exit_fallback_rules import bucket_for_dte
+from orion.execution.factor_inputs import compute_candidate_factors, factor_gate_reason
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
 from orion.execution.persistence import (
     count_open_journal_positions,
@@ -347,6 +348,52 @@ def _extract_contract_greeks(contract: dict[str, Any]) -> dict[str, float] | Non
         return None
     theta = _coerce(contract.get("theta")) or 0.0
     return {"delta": delta, "gamma": gamma, "theta": theta, "vega": vega}
+
+
+def _extract_contract_snapshot(contract: dict[str, Any] | None) -> dict[str, Any]:
+    """Freeze the pre-decision chain state the factor study needs.
+
+    The chain response the entry is priced off already carries IV, greeks,
+    open interest, volume and the vendor's own snapshot timestamp; without
+    persisting them here, nothing reconstructs the option's state at decision
+    time after the fact.
+
+    Every value is coerced to a JSON-native float/int/str, and anything absent,
+    unparseable or non-finite becomes None — a `json` column rejects NaN, and a
+    missing field must never fail an order.
+    """
+
+    def _float(value: Any) -> float | None:
+        if value in (None, ""):
+            return None
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        return result if math.isfinite(result) else None
+
+    def _int(value: Any) -> int | None:
+        result = _float(value)
+        return None if result is None else int(result)
+
+    snapshot_ts = None if contract is None else contract.get("timestamp")
+    if isinstance(snapshot_ts, datetime):
+        snapshot_ts = snapshot_ts.isoformat()
+    elif snapshot_ts is not None:
+        snapshot_ts = str(snapshot_ts)
+
+    contract = contract or {}
+    return {
+        "iv": _float(contract.get("iv")),
+        "delta": _float(contract.get("delta")),
+        "gamma": _float(contract.get("gamma")),
+        "theta": _float(contract.get("theta")),
+        "vega": _float(contract.get("vega")),
+        "open_interest": _int(contract.get("open_interest")),
+        "volume": _int(contract.get("volume")),
+        "underlying_price": _float(contract.get("underlying_price")),
+        "snapshot_ts": snapshot_ts,
+    }
 
 
 def _project_position_greeks(contract_greeks: dict[str, float] | None, num_contracts: int) -> dict[str, float] | None:
@@ -1047,6 +1094,7 @@ class ExecutionEngine:
         # below ever runs.
         option_price = None
         contract_greeks: dict[str, float] | None = None
+        contract_snapshot: dict[str, Any] = _extract_contract_snapshot(None)
         bid_f = ask_f = 0.0
         client = self._get_gateway_client()
         chain_expiration_date = chain_option_type = None
@@ -1072,12 +1120,21 @@ class ExecutionEngine:
                     # Same chain response carries per-contract greeks — capture
                     # them here so the risk gate below has no extra round-trip.
                     contract_greeks = _extract_contract_greeks(contract)
+                    contract_snapshot = _extract_contract_snapshot(contract)
                     bid = contract.get("bid")
                     ask = contract.get("ask")
                     try:
                         bid_f = float(bid) if bid not in (None, "") else 0.0
                         ask_f = float(ask) if ask not in (None, "") else 0.0
                     except (TypeError, ValueError):
+                        bid_f = ask_f = 0.0
+                    # A non-finite quote is garbage, not a market: an infinite
+                    # bid/ask clears the two-sided and spread checks below (inf
+                    # > 0, and a NaN spread compares false against every cap),
+                    # then overflows the tick rounding and writes NaN/Infinity
+                    # into the decision trace, which a `json` column rejects.
+                    # Treat it exactly like an unparseable quote.
+                    if not math.isfinite(bid_f) or not math.isfinite(ask_f):
                         bid_f = ask_f = 0.0
                     if bid_f > 0 and ask_f > 0:
                         option_price = (bid_f + ask_f) / 2
@@ -1146,6 +1203,7 @@ class ExecutionEngine:
             "mid": option_price,
             "spread_pct": round((ask_f - bid_f) / option_price, 4) if option_price > 0 else None,
             "ts_utc": datetime.now(UTC).isoformat(),
+            **contract_snapshot,
         }
 
         # Pay-up pricing: a limit resting AT mid fills ~36% of the time and
@@ -1334,6 +1392,45 @@ class ExecutionEngine:
         if self._check_circuit_breaker():
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "High Error Rate"
+            return
+
+        # Shadow factor set, recorded on candidates that have cleared every
+        # admission check and are about to be ordered — the population whose
+        # realized outcomes the factors will eventually be scored against.
+        # Placed last on purpose: its two database reads are time-capped, and a
+        # slow database must not delay a candidate that the caps, sizing, or
+        # risk manager were going to reject anyway. Log-only unless
+        # ORION_FACTOR_GATES turns a factor into a filter, and a factor failure
+        # is never allowed to cost an order.
+        try:
+            factors = await compute_candidate_factors(candidate, decision.decision_trace_json["entry_quote"])
+        except Exception as exc:
+            logger.warning(
+                "candidate_factors_failed",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+                error=str(exc),
+            )
+            factors = {}
+        decision.decision_trace_json["factors"] = factors
+        logger.info(
+            "candidate_factors",
+            ticker=candidate.ticker,
+            option_symbol=candidate.option_symbol,
+            candidate_id=candidate.candidate_id,
+            **factors,
+        )
+
+        gate_reason = factor_gate_reason(factors)
+        if gate_reason:
+            logger.warning(
+                "options_blocked_factor_gate",
+                option_symbol=candidate.option_symbol,
+                ticker=candidate.ticker,
+                reason=gate_reason,
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = gate_reason
             return
 
         await self._submit_options_order(decision, candidate, num_contracts, option_price, position_greeks)

@@ -422,6 +422,17 @@ class SystemSettings(BaseSettings):
         default_factory=dict,
         validation_alias="ORION_EXIT_BUCKET_OVERRIDES",
     )
+    # --- Decision-time factor gates (default: pure shadow) ---
+    # The factor set in processing/factors.py is logged on every executed
+    # candidate so it can be evaluated against Orion's own realized outcomes.
+    # Empty means log-only. Populating this turns a factor into an entry filter,
+    # e.g. ORION_FACTOR_GATES='{"f_vrp": {"min": -0.5}, "f_dte": {"max": 30}}'
+    # SKIPs any candidate whose factor falls outside the band. Either bound may
+    # be omitted. A factor that could not be computed never fires its gate.
+    factor_gates: dict[str, dict[str, float]] = Field(
+        default_factory=dict,
+        validation_alias="ORION_FACTOR_GATES",
+    )
     proposals_dir: str = Field(default="proposals", validation_alias="ORION_PROPOSALS_DIR")
 
     # SQLite tuning
