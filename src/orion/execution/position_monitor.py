@@ -6,7 +6,10 @@ and rule-based exit signals.
 """
 
 import asyncio
+import resource
+import sys
 import time
+from collections.abc import Coroutine
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -96,6 +99,27 @@ def _bucket_from_occ_symbol(symbol: str) -> str | None:
     from orion.execution.exit_fallback_rules import bucket_for_dte
 
     return bucket_for_dte(dte)
+
+
+async def _run_coroutine_in_thread(coro: Coroutine[Any, Any, Any]) -> Any:
+    """Await ``coro`` on a private event loop inside a worker thread.
+
+    For work that is nominally async but whose implementation blocks on
+    synchronous I/O. Running it on its own loop keeps the caller's loop free to
+    service timers and other coroutines, which is what makes an enclosing
+    timeout enforceable at all.
+    """
+    return await asyncio.to_thread(asyncio.run, coro)
+
+
+def _process_rss_mb() -> float:
+    """Resident-set high-water mark for this process, in MiB.
+
+    ``ru_maxrss`` is bytes on macOS and kibibytes on Linux.
+    """
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+    return round(peak / divisor, 1)
 
 
 def _is_exercise_residue_candidate(symbol: str | None, orion_option_underlyings: set[str]) -> bool:
@@ -403,10 +427,34 @@ class PositionMonitor:
         # GEX, market tide, premium, DTE-at-entry, …) is immutable
         # post-entry, so a session-lifetime cache is correct.
         self._entry_context_cache: dict[str, dict[str, Any]] = {}
+        # In-flight background resolutions, one task per symbol. Entry-context
+        # enrichment reaches multi-second Heber parquet scans, so it resolves
+        # off the cycle's critical path: sync_positions waits only up to the
+        # budget below and never cancels the work, so a slow resolution lands
+        # in the cache for a later cycle instead of being discarded and redone.
+        self._entry_context_tasks: dict[str, asyncio.Task[None]] = {}
+        # Per-symbol retry gate for resolutions that failed outright.
+        self._entry_context_retry_at: dict[str, float] = {}
+        self._entry_context_backoff_seconds: dict[str, float] = {}
+        # Symbols whose resolved context has been written onto their
+        # TrackedPosition, so a late-arriving context is applied exactly once.
+        self._entry_context_applied: set[str] = set()
+        # Bumped whenever a position is dropped, so a resolution still running
+        # for the closed position cannot cache or apply onto a later reopen.
+        self._entry_context_generation: dict[str, int] = {}
+        # Enrichment scans are memory-heavy (a single 370-day bars read peaks
+        # above 7 GB), so only one runs at a time regardless of position count.
+        self._entry_context_semaphore = asyncio.Semaphore(self._ENTRY_CONTEXT_MAX_CONCURRENCY)
 
-    # Per-symbol budget for the entry-context join during sync_positions. A
-    # fetch that overruns it is retried next cycle rather than cached.
+    # How long a sync_positions cycle will wait for pending entry-context
+    # resolutions before falling back to the contract-derived bucket. This
+    # bounds the CYCLE, not the work: overrunning resolutions keep running.
     _ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 2.0
+    # Concurrent entry-context resolutions.
+    _ENTRY_CONTEXT_MAX_CONCURRENCY = 1
+    # Exponential backoff bounds for a symbol whose resolution raised.
+    _ENTRY_CONTEXT_RETRY_BASE_SECONDS = 30.0
+    _ENTRY_CONTEXT_RETRY_MAX_SECONDS = 300.0
 
     @staticmethod
     def _apply_entry_context(pos: TrackedPosition, entry_context: dict[str, Any]) -> None:
@@ -463,43 +511,48 @@ class PositionMonitor:
             del self.tracked_positions[symbol]
             # Drop cached entry-context so a close+reopen of the same symbol
             # in the same process doesn't reuse a stale decision_id / context.
-            self._entry_context_cache.pop(symbol, None)
+            self._discard_entry_context(symbol)
 
-        # Pre-fetch entry-context for every symbol without a cached context,
-        # in parallel with a per-call timeout. On a cold container with ~200
-        # positions and ~200ms per flow_enricher round-trip, doing this
-        # sequentially in the construction loop would block startup for tens
-        # of seconds before the first exit evaluation. This covers new
-        # positions and tracked positions whose earlier fetch timed out or
-        # failed — those are deliberately left uncached so the real context
-        # is retried here instead of frozen at the fallback for the life of
-        # the process (July 2026: 0DTE contracts ran SWING parameters that way).
+        # Resolve entry-context for every symbol without a cached context. On a
+        # cold container with ~200 positions, resolving these inline in the
+        # construction loop would block startup for tens of seconds before the
+        # first exit evaluation, so resolution runs in the background and this
+        # cycle waits only up to the budget. Covers new positions and tracked
+        # positions whose earlier resolution failed — those are deliberately
+        # left uncached so the real context is retried rather than frozen at
+        # the fallback for the life of the process (July 2026: 0DTE contracts
+        # ran SWING parameters that way).
         uncached = [p.symbol for p in broker_positions if p.symbol not in self._entry_context_cache]
-        retrying = {s for s in uncached if s in self.tracked_positions}
-        # This cycle's fallback for symbols whose fetch timed out. Local, never
-        # cached: the bucket comes from the contract's own expiry so a 0DTE gets
-        # 0DTE cadence, stops, and flatten even before the join resolves.
+        # This cycle's fallback for symbols still awaiting resolution. Local,
+        # never cached: the bucket comes from the contract's own expiry so a
+        # 0DTE gets 0DTE cadence, stops, and flatten even before the join
+        # resolves.
         timed_out: dict[str, dict[str, Any]] = {}
         if uncached:
+            await self._await_entry_contexts(uncached)
+            for sym in uncached:
+                if sym in self._entry_context_cache:
+                    continue
+                fallback_bucket = _bucket_from_occ_symbol(sym) or "SWING"
+                logger.warning(
+                    f"Entry-context fetch timed out for {sym}; using bucket {fallback_bucket} "
+                    f"from the contract symbol this cycle while resolution continues",
+                    extra={"event": "entry_context_timeout", "symbol": sym, "bucket": fallback_bucket},
+                )
+                timed_out[sym] = {"bucket": fallback_bucket}
 
-            async def _bounded_fetch(sym: str) -> None:
-                try:
-                    await asyncio.wait_for(
-                        self._fetch_entry_context(sym), timeout=self._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS
-                    )
-                except TimeoutError:
-                    fallback_bucket = _bucket_from_occ_symbol(sym) or "SWING"
-                    logger.warning(
-                        f"Entry-context fetch timed out for {sym}; using bucket {fallback_bucket} "
-                        f"from the contract symbol this cycle and retrying next cycle",
-                        extra={"event": "entry_context_timeout", "symbol": sym, "bucket": fallback_bucket},
-                    )
-                    timed_out[sym] = {"bucket": fallback_bucket}
-
-            await asyncio.gather(
-                *[_bounded_fetch(s) for s in uncached],
-                return_exceptions=True,
-            )
+        # Tracked positions whose context has resolved but has not been applied
+        # yet. Resolution runs in the background and usually lands after the
+        # cycle that created the position, so "resolved" cannot be inferred
+        # from this cycle's uncached list — it has to be tracked explicitly, or
+        # a late-arriving context is silently never applied.
+        pending_apply = {
+            symbol
+            for symbol in broker_symbols
+            if symbol in self.tracked_positions
+            and symbol in self._entry_context_cache
+            and symbol not in self._entry_context_applied
+        }
 
         # Update existing or add new positions
         for bp in broker_positions:
@@ -518,8 +571,9 @@ class PositionMonitor:
                 # Entry context that arrived on retry (see the pre-fetch above)
                 # is applied in place, so bucket-specific exits and the real
                 # entry time take effect without disturbing the running envelope.
-                if symbol in retrying and symbol in self._entry_context_cache:
+                if symbol in pending_apply:
                     self._apply_entry_context(pos, self._entry_context_cache[symbol])
+                    self._entry_context_applied.add(symbol)
                     logger.info(
                         f"Entry context resolved late for {symbol}: bucket={pos.bucket}",
                         extra={
@@ -596,6 +650,10 @@ class PositionMonitor:
                     max_drawdown_pct=seeded_drawdown,
                 )
                 self._apply_entry_context(pos, entry_context)
+                # Only a resolved context counts as applied; the contract-derived
+                # fallback must stay eligible for late application.
+                if symbol in self._entry_context_cache:
+                    self._entry_context_applied.add(symbol)
                 self.tracked_positions[symbol] = pos
                 # Initial upsert so the row exists for subsequent
                 # rehydration (e.g. if the container restarts before
@@ -626,6 +684,106 @@ class PositionMonitor:
                 )
 
         return list(self.tracked_positions.values())
+
+    async def _await_entry_contexts(self, symbols: list[str]) -> None:
+        """Start background entry-context resolution and wait out the budget.
+
+        Waiting is deliberately non-destructive: ``asyncio.wait`` returns when
+        the budget expires but leaves unfinished resolutions running, so the
+        work completes once and is cached instead of being cancelled and
+        repeated on every cycle. Callers treat a symbol that is still missing
+        from the cache as unresolved for this cycle and fall back to the
+        bucket encoded in the contract symbol.
+        """
+        pending = [task for task in (self._ensure_entry_context_task(s) for s in symbols) if task is not None]
+        if not pending:
+            return
+        await asyncio.wait(pending, timeout=self._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS)
+
+    def _ensure_entry_context_task(self, symbol: str) -> asyncio.Task[None] | None:
+        """Return the in-flight resolution for ``symbol``, starting one if due.
+
+        Returns None while a previously failed symbol is inside its backoff
+        window, so a symbol that cannot resolve costs one attempt per backoff
+        interval rather than one per cycle.
+        """
+        existing = self._entry_context_tasks.get(symbol)
+        if existing is not None:
+            return existing
+        retry_at = self._entry_context_retry_at.get(symbol)
+        if retry_at is not None and time.monotonic() < retry_at:
+            return None
+        generation = self._entry_context_generation.get(symbol, 0)
+        task = asyncio.create_task(self._resolve_entry_context(symbol, generation))
+        self._entry_context_tasks[symbol] = task
+        return task
+
+    async def _resolve_entry_context(self, symbol: str, generation: int) -> None:
+        """Resolve and cache one symbol's entry context, serialised and bounded.
+
+        Runs under a semaphore because enrichment reaches Heber parquet scans
+        whose peak memory is measured in gigabytes; a failure schedules an
+        exponentially backed-off retry rather than looping hot.
+
+        ``generation`` pins the result to the position that requested it. The
+        permit is held until the worker thread genuinely finishes, so a symbol
+        that closes mid-scan cannot hand the slot to a second scan while the
+        first is still resident; a result that arrives for a superseded
+        generation is discarded instead of being cached against the reopen.
+        """
+        try:
+            async with self._entry_context_semaphore:
+                if generation != self._entry_context_generation.get(symbol, 0):
+                    return
+                await self._fetch_entry_context(symbol)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(
+                f"Entry-context resolution failed for {symbol}: {e}",
+                extra={"event": "entry_context_resolution_failed", "symbol": symbol, "error": str(e)},
+            )
+        finally:
+            # Only clear our own entry: a close+reopen of the same symbol may
+            # already have registered a replacement task.
+            if self._entry_context_tasks.get(symbol) is asyncio.current_task():
+                self._entry_context_tasks.pop(symbol, None)
+
+        if generation != self._entry_context_generation.get(symbol, 0):
+            # The position closed while this was resolving. Drop anything the
+            # fetch cached so a reopen re-resolves against its own decision.
+            self._entry_context_cache.pop(symbol, None)
+            return
+
+        if symbol in self._entry_context_cache:
+            self._entry_context_backoff_seconds.pop(symbol, None)
+            self._entry_context_retry_at.pop(symbol, None)
+            return
+
+        previous = self._entry_context_backoff_seconds.get(symbol, 0.0)
+        backoff = min(
+            previous * 2 if previous else self._ENTRY_CONTEXT_RETRY_BASE_SECONDS,
+            self._ENTRY_CONTEXT_RETRY_MAX_SECONDS,
+        )
+        self._entry_context_backoff_seconds[symbol] = backoff
+        self._entry_context_retry_at[symbol] = time.monotonic() + backoff
+
+    def _discard_entry_context(self, symbol: str) -> None:
+        """Drop all entry-context state for a symbol that is no longer held.
+
+        An in-flight resolution is deliberately NOT cancelled and NOT removed
+        from the task map. Cancelling would unwind the semaphore and hand the
+        single scan permit to another symbol while the abandoned worker thread
+        keeps scanning — ``asyncio.to_thread`` work cannot be interrupted — so
+        close/reopen churn could stack the very multi-gigabyte scans the permit
+        exists to serialise. The resolution instead drains on its own, and the
+        generation bump below makes its result inapplicable.
+        """
+        self._entry_context_generation[symbol] = self._entry_context_generation.get(symbol, 0) + 1
+        self._entry_context_cache.pop(symbol, None)
+        self._entry_context_retry_at.pop(symbol, None)
+        self._entry_context_backoff_seconds.pop(symbol, None)
+        self._entry_context_applied.discard(symbol)
 
     async def _fetch_entry_context(self, symbol: str) -> dict[str, Any]:
         """
@@ -826,17 +984,25 @@ class PositionMonitor:
                     except AttributeError:
                         expiry_str = str(expiration_date)
 
-                enrichment = await enrich_flow_for_scoring(
-                    ticker=ticker,
-                    entry_ts=entry_time,
-                    put_call=put_call,
-                    dte=dte,
-                    premium_usd=float(premium_usd) if premium_usd is not None else None,
-                    event_id=event_id,
-                    option_chain=row.get("option_symbol"),
-                    aggressor=evidence.get("aggressor") if isinstance(evidence, dict) else None,
-                    is_sweep=is_sweep,
-                    expiry=expiry_str,
+                # Offloaded to a worker thread: the enricher fans out to
+                # HeberReader, whose parquet scans are synchronous and can run
+                # for over a minute (a 370-day bars read measured 80s). Awaited
+                # inline they block the whole monitor loop for that duration —
+                # exit evaluation included — and make the fetch budget above
+                # unenforceable, because a blocked loop cannot fire its timers.
+                enrichment = await _run_coroutine_in_thread(
+                    enrich_flow_for_scoring(
+                        ticker=ticker,
+                        entry_ts=entry_time,
+                        put_call=put_call,
+                        dte=dte,
+                        premium_usd=float(premium_usd) if premium_usd is not None else None,
+                        event_id=event_id,
+                        option_chain=row.get("option_symbol"),
+                        aggressor=evidence.get("aggressor") if isinstance(evidence, dict) else None,
+                        is_sweep=is_sweep,
+                        expiry=expiry_str,
+                    )
                 )
             except Exception as e:
                 logger.warning(
@@ -1352,6 +1518,7 @@ class PositionMonitor:
                 "positions_checked": 0,
                 "exit_signals": 0,
                 "exits_executed": 0,
+                "rss_mb": _process_rss_mb(),
             }
 
         # Evaluate exits
@@ -1368,6 +1535,10 @@ class PositionMonitor:
             "exit_signals": len(exit_signals),
             "exits_executed": sum(1 for r in results if r.get("executed")),
             "exits": results,
+            # Cheap growth guard: the 2026-08-17 leak was only visible because
+            # someone happened to look at `top`. Peak RSS on every cycle line
+            # makes the same growth obvious from the structured logs alone.
+            "rss_mb": _process_rss_mb(),
         }
 
         logger.info(

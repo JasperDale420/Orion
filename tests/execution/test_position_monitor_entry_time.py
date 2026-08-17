@@ -28,7 +28,7 @@ async def test_sync_positions_uses_decision_timestamp_for_new_position() -> None
     real_entry_ts = datetime.now(UTC) - timedelta(hours=4)
 
     async def _fake_entry_context(symbol: str) -> dict:
-        return {
+        context = {
             "decision_id": "dec-real",
             "option_symbol": "AAPL260418C00150000",
             "premium_usd": 200.0,
@@ -37,6 +37,10 @@ async def test_sync_positions_uses_decision_timestamp_for_new_position() -> None
             "direction": "LONG",
             "entry_time": real_entry_ts,
         }
+        # Mirror the real method: a successfully resolved context is written to
+        # the cache, which is what marks the symbol resolved for this cycle.
+        monitor._entry_context_cache[symbol] = context
+        return context
 
     monitor._fetch_entry_context = _fake_entry_context  # type: ignore[method-assign]
 
