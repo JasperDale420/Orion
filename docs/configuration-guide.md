@@ -148,8 +148,7 @@ Per-regime risk multipliers live in `config/regime_risk.yaml` (not env-vars).
 | `ORION_ML_PREFILTER_THRESHOLD` | `0.05` | LightGBM score gate before solver vote |
 | `ORION_ML_STALE_MODEL_POLICY` | `warn` | What to do if ML scorer is stale: `skip` = use heuristic fallback, `warn` = load and warn, `bypass` = skip ML gating |
 | `ORION_HEURISTIC_CAP_LIVE` | `0.65` | Maximum heuristic pre-filter score in live mode |
-| `ORION_CIRCUIT_BREAKER_ENABLED` | `false` | Per-strategy breaker |
-| `ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED` | `false` | Global kill on consecutive failures |
+| `ORION_CIRCUIT_BREAKER_ENABLED` | `false` | Per-process broker-error breaker. The global breaker has no disable switch — see [circuit_breaker runbook](runbooks/circuit_breaker.md) |
 | `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE` | `false` | Forces fresh-rollup gate on live signals |
 
 ## Exit fallback rules

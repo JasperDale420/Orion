@@ -453,12 +453,14 @@ class SystemSettings(BaseSettings):
 
     # Circuit breaker
     trip_circuit_breaker_on_lag: bool = Field(default=False, validation_alias="ORION_TRIP_CIRCUIT_BREAKER_ON_LAG")
-    # Master kill switches for both breakers. When false, the breaker still
-    # records events (so logs show what would have tripped) but trading is
-    # never blocked by it. Intended for forward-testing windows where a
-    # spurious trip is more costly than a real broker-error event.
+    # Master kill switch for the per-process broker-error breaker. When false,
+    # it still records events (so logs show what would have tripped) but
+    # trading is never blocked by it. Intended for forward-testing windows
+    # where a spurious trip is more costly than a real broker-error event.
+    # The GLOBAL breaker has no such switch: it is the drawdown/daily-loss
+    # kill switch and the operator's emergency stop, and an OPEN row always
+    # halts new entries.
     circuit_breaker_enabled: bool = Field(default=True, validation_alias="ORION_CIRCUIT_BREAKER_ENABLED")
-    global_circuit_breaker_enabled: bool = Field(default=True, validation_alias="ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED")
     # Per-process broker-result error-rate breaker (in ExecutionEngine).
     # The previous deque[bool] with maxlen=20 had no time component: a single
     # failure stayed in the deque all day during low-volume periods. The
