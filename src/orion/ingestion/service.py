@@ -564,6 +564,11 @@ class IngestionService:
                 # 60s sleep chunk keeps the DB row well within
                 # ingestion_heartbeat_max_age.
                 await self._update_health_status()
+                # The single-instance lease has the same problem: `run()` only
+                # renews it after `_run_cycle` returns, which never happens
+                # while this loop is parked over a weekend. A lease older than
+                # SERVICE_LEASE_STALE_SECONDS lets a second instance take over.
+                await self._maybe_renew_lease()
                 # Re-checked each chunk so the settlement grace period elapsing
                 # mid-sleep still triggers, and so a failed run retries within
                 # the same night (bounded by EOD_RETRY_INTERVAL_SECONDS).
