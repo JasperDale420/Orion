@@ -172,9 +172,12 @@ class TestRenewServiceLease:
         # Same run_id — renewal does NOT mint a new id
         assert f"run_id={engine._lease_run_id}" in renewed.details
 
-    async def test_renew_aborts_when_another_process_owns_lease(self, caplog) -> None:
-        """If another process took over the lease (e.g. we hung past the stale
-        threshold), renew must NOT overwrite their row — log and bow out."""
+    async def test_renew_fences_when_another_process_owns_lease(self, caplog) -> None:
+        """If another live process took over the lease, renew must NOT overwrite
+        their row, and must stop this instance rather than log and carry on:
+        the engine's in-memory order/fill state assumes a single process."""
+        from orion.core.service_lease import ServiceLeaseLostError
+
         await init_db()
         await _reset_lease_row("takeover_test")
 
@@ -188,8 +191,8 @@ class TestRenewServiceLease:
             row.details = "run_id=ffffffff-ffff-ffff-ffff-ffffffffffff host=other pid=9999"
             await session.commit()
 
-        # Renew should NOT raise, and must NOT overwrite the other process's row
-        await engine.renew_service_lease()
+        with pytest.raises(ServiceLeaseLostError):
+            await engine.renew_service_lease()
 
         async with async_session_factory() as session:
             stmt = select(SystemStatus).where(SystemStatus.key == f"{SERVICE_LEASE_KEY_PREFIX}takeover_test")

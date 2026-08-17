@@ -3,13 +3,26 @@
 ## Overview
 
 The circuit breaker is a global kill switch backed by the `system_status` table,
-under the key `GLOBAL_CIRCUIT_BREAKER`. When OPEN, `ExecutionEngine` blocks every
-order (`EXECUTION BLOCKED: Circuit breaker is OPEN`) and connectors skip polling.
+under the key `GLOBAL_CIRCUIT_BREAKER`.
+
+**It halts new entries. It never blocks an exit.** A halted system still has to
+be able to get flat, so no close/exit path consults it. When OPEN:
+
+- `preflight_live_signal` SKIPs each candidate with `Circuit Breaker Open`;
+- `ExecutionEngine._pre_flight_checks` blocks at the engine
+  (`EXECUTION BLOCKED: Circuit breaker is OPEN`);
+- `close_position`, the position monitor's exit loop, and the execution loop's
+  rule-based exit sweep all keep running.
+
+**There is no disable switch.** `ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED` used to
+make `is_open()` return False on an OPEN row. It disabled nothing — the engine
+read the row directly and blocked entries anyway — while emitting a WARNING per
+call (2,287 on 2026-08-14). It was removed; an OPEN row always halts entries.
 
 **It latches.** Nothing closes it automatically — once open it stays open until an
 operator resets it, across restarts. That is deliberate: the conditions that trip
 it are ones a human should look at. It also means a breaker left open silently
-disables trading for as long as nobody notices.
+disables new entries for as long as nobody notices.
 
 Schema: `key`, `status`, `details`, `last_updated_utc`.
 

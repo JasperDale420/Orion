@@ -139,7 +139,7 @@ async def test_ingestion_heartbeat_renews_lease(monkeypatch) -> None:
 
     with patch("orion.ingestion.service.renew_service_lease", new=AsyncMock()) as spy:
         await service._maybe_renew_lease()
-        spy.assert_awaited_once_with("ingestion", "ghost-run")
+        spy.assert_awaited_once_with("ingestion", "ghost-run", fence_on_confirmed_loss=True)
 
 
 @pytest.mark.integration

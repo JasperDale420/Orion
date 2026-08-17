@@ -472,13 +472,19 @@ class ExecutionEngine:
     async def renew_service_lease(self) -> None:
         """Refresh the lease's ``last_updated_utc`` so other processes treat it as live.
 
-        No-op if ``acquire_service_lease`` was never called. Errors are
-        logged but do not propagate — a transient DB blip should not
-        abort the main execution loop.
+        No-op if ``acquire_service_lease`` was never called — the position
+        monitor builds an engine without one, and must not start fencing.
+
+        Transient DB errors are logged but do not propagate: a blip should
+        not abort the main execution loop. A CONFIRMED takeover does
+        propagate as ``ServiceLeaseLostError``: the engine's in-memory
+        pending_orders / processed_fill_ids / _partial_fill_tracker /
+        _closing_symbols are the reason the lease exists, so a displaced
+        instance must stop polling fills and submitting orders, not log it.
         """
         if not self._lease_service_id or not self._lease_run_id:
             return
-        await _renew_service_lease(self._lease_service_id, self._lease_run_id)
+        await _renew_service_lease(self._lease_service_id, self._lease_run_id, fence_on_confirmed_loss=True)
 
     def _get_gateway_client(self) -> Any:
         """Lazy-initialize Gateway trading client singleton."""
@@ -1429,6 +1435,30 @@ class ExecutionEngine:
         position_greeks: dict[str, float] | None = None,
     ) -> None:
         """Submit an options order via Data Gateway."""
+        # Last-moment breaker fence. `_pre_flight_checks` ran before the option
+        # chain was fetched over the network, and the breaker is opened by other
+        # processes (operator, drawdown kill switch) — so the earlier verdict can
+        # be seconds old by the time we get here. Re-read it at the submission
+        # authority, before any order id, buying-power reservation, rate-limiter
+        # token or pending-order row is claimed, so an abort leaves no state to
+        # unwind. This narrows the window to a single row read; it cannot close
+        # a cross-process race entirely.
+        from orion.core.circuit_breaker import CircuitBreaker
+
+        if await CircuitBreaker().is_open():
+            logger.critical(
+                "EXECUTION BLOCKED: Circuit breaker opened before submission",
+                extra={
+                    "event_type": "EXECUTION_BLOCKED",
+                    "reason": "Circuit Breaker Open",
+                    "ticker": candidate.ticker,
+                    "option_symbol": candidate.option_symbol,
+                },
+            )
+            decision.executed_successfully = DecisionStatus.FALSE
+            decision.reason = "Circuit Breaker Open"
+            return
+
         logger.info(
             "options_execution_triggered",
             num_contracts=num_contracts,
@@ -2782,33 +2812,25 @@ class ExecutionEngine:
     async def _check_system_health(self) -> bool:
         """Queries SystemStatus table to ensure Global Health is OK and circuit breaker is not open.
 
-        Results are cached for ``_health_cache_ttl`` seconds (default 10s) to
-        avoid redundant DB queries when multiple candidates are evaluated in
-        the same execution cycle.
+        The circuit breaker is read UNCACHED on every call. It is the kill
+        switch, and it is opened by other processes (an operator via the admin
+        API, the drawdown kill switch); honouring a cached "healthy" verdict
+        for the TTL would admit entries into an already-halted system. The
+        health and discovery rows move slowly and stay cached for
+        ``_health_cache_ttl`` seconds (default 10s) so a cycle evaluating many
+        candidates doesn't re-query them per candidate.
         """
-        if self._health_cache and (time.monotonic() - self._health_cache[1]) < self._health_cache_ttl:
-            return self._health_cache[0]
-
         from orion.core.circuit_breaker import CircuitBreaker
         from orion.enrichment.heber_context import DEGRADED_DISCOVERY_KEY, DISCOVERY_STATUS_DEGRADED
         from orion.storage.models import SystemStatus
 
         try:
 
-            async def fetch_health_records(session: Any) -> tuple[Any, Any, Any]:
+            async def fetch_breaker(session: Any) -> Any:
                 cb_stmt = select(SystemStatus).where(SystemStatus.key == CircuitBreaker.KEY)
-                health_stmt = select(SystemStatus).where(SystemStatus.key == "global_health")
-                discovery_stmt = select(SystemStatus).where(SystemStatus.key == DEGRADED_DISCOVERY_KEY)
-                cb_result = await session.execute(cb_stmt)
-                health_result = await session.execute(health_stmt)
-                discovery_result = await session.execute(discovery_stmt)
-                return (
-                    cb_result.scalars().first(),
-                    health_result.scalars().first(),
-                    discovery_result.scalars().first(),
-                )
+                return (await session.execute(cb_stmt)).scalars().first()
 
-            cb_record, status_record, discovery_record = await db_query(fetch_health_records)
+            cb_record = await db_query(fetch_breaker)
 
             if cb_record and cb_record.status == "OPEN":
                 logger.critical(
@@ -2819,8 +2841,24 @@ class ExecutionEngine:
                         "details": cb_record.details,
                     },
                 )
-                self._health_cache = (False, time.monotonic())
+                # Deliberately not cached: a breaker closed by the operator
+                # must resume entries on the next candidate, not 10s later.
                 return False
+
+            if self._health_cache and (time.monotonic() - self._health_cache[1]) < self._health_cache_ttl:
+                return self._health_cache[0]
+
+            async def fetch_health_records(session: Any) -> tuple[Any, Any]:
+                health_stmt = select(SystemStatus).where(SystemStatus.key == "global_health")
+                discovery_stmt = select(SystemStatus).where(SystemStatus.key == DEGRADED_DISCOVERY_KEY)
+                health_result = await session.execute(health_stmt)
+                discovery_result = await session.execute(discovery_stmt)
+                return (
+                    health_result.scalars().first(),
+                    discovery_result.scalars().first(),
+                )
+
+            status_record, discovery_record = await db_query(fetch_health_records)
 
             # Discovery degradation: feature_enrichment writes DEGRADED when
             # ticker discovery has been falling back to the static SPY/QQQ/...

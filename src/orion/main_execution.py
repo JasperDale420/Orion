@@ -8,6 +8,7 @@ load_dotenv()
 
 from orion.config import system_settings
 from orion.core.enums import DecisionAction, DecisionStatus
+from orion.core.service_lease import ServiceLeaseLostError
 from orion.execution.execution_engine import ExecutionEngine
 from orion.execution.flow_helpers import (
     _scope_recent_flow_for_position,
@@ -143,19 +144,13 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
             # 1.5 Poll Fills (Real-time Risk Updates)
             await execution_engine.poll_fills()
 
-            # 1.6 Check Circuit Breaker
-            from orion.core.circuit_breaker import CircuitBreaker
-
-            cb = CircuitBreaker()
-            if await cb.is_open():
-                state = await cb.get_state()
-                logger.warning(f"CIRCUIT BREAKER OPEN: {state.get('reason')}. Pausing execution.")
-                # Liveness: a deliberate breaker pause is a healthy, functioning
-                # loop — publish success so the dead-man doesn't double-alarm on
-                # top of the breaker's own alerting.
-                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
-                await asyncio.sleep(5.0)
-                continue
+            # No circuit-breaker gate here on purpose. An open breaker halts
+            # ENTRIES, and both entry gates below are inside the per-candidate
+            # path: `preflight_live_signal` SKIPs with "Circuit Breaker Open"
+            # and `ExecutionEngine._pre_flight_checks` blocks at the engine.
+            # A gate here had to `continue`, which skipped the rule-based exit
+            # sweep at the bottom of this same iteration — a latched breaker
+            # would have stopped the halted system from getting flat.
 
             # 2. Poll Pending Candidates
             #    Sweep stale candidates first so the pending pool doesn't
@@ -172,15 +167,13 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
 
             candidates = await fetch_pending_candidates()
 
-            if not candidates:
-                # Liveness: an empty candidate pool is the normal quiet state —
-                # the full poll+sweep+fetch cycle succeeded.
-                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
-                # Sleep and continue
-                await asyncio.sleep(1.0)
-                continue
-
-            logger.info(f"Processing {len(candidates)} new candidates...")
+            # An empty candidate pool never short-circuits the cycle. It is the
+            # normal quiet state — and the steady state after a halt, once the
+            # breaker has SKIPped the pool dry — so `continue`ing here skipped
+            # the rule-based exit sweep below on exactly the cycles where
+            # getting flat matters most. The tail's smart sleep paces the loop.
+            if candidates:
+                logger.info(f"Processing {len(candidates)} new candidates...")
 
             for candidate in candidates:
                 # 3. Policy Execution
@@ -247,6 +240,14 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
             # heartbeat even when decisioning/preflight/persistence then failed).
             await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
 
+        except ServiceLeaseLostError:
+            # Another live instance owns the `execution` lease (poll_fills
+            # renews it every iteration). The engine's in-memory order and
+            # fill state assumes one process, so stop rather than log and
+            # continue: exit non-zero and let launchd relaunch, which
+            # re-acquires only if the lease is genuinely free.
+            shutdown_event.set()
+            raise
         except Exception as e:
             logger.error(f"Main Loop Error: {e}")
             # Error-only liveness: records last_error but does NOT advance
