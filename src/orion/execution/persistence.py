@@ -935,8 +935,22 @@ async def sweep_expired_in_session(session: Any, *, only_decision_ids: set[str] 
     return realized
 
 
-async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: str, order: Any) -> None:
-    """Persist exit decision to database."""
+async def persist_exit_decision(
+    ticker: str,
+    exit_signal: Any,
+    client_order_id: str,
+    order: Any,
+    exit_quote: dict[str, Any] | None = None,
+) -> None:
+    """Persist exit decision to database.
+
+    ``exit_quote`` is the close-time market (see ``orion.execution.exit_costs``),
+    stored under ``details['exit_quote']`` — the exit-side counterpart of the
+    entry's ``decision_trace_json['entry_quote']``, and the only record of what
+    the close was priced against. It is measurement data: the rule's own details
+    are copied, never mutated, so a missing or malformed quote changes nothing
+    about the exit itself.
+    """
     try:
 
         async def save_exit(session: Any) -> None:
@@ -947,6 +961,10 @@ async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: 
                 broker_order_id = str(order.get("id", "")) or None
             elif order is not None:
                 broker_order_id = str(getattr(order, "id", "")) if order else None
+
+            details = dict(exit_signal.details or {})
+            if exit_quote is not None:
+                details["exit_quote"] = exit_quote
 
             # candidate_id is deliberately NOT written here. This row means "a
             # close was SUBMITTED", not "the position is closed" — the order
@@ -963,7 +981,7 @@ async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: 
                     exit_reason=exit_signal.reason,
                     urgency=exit_signal.urgency,
                     confidence=exit_signal.confidence,
-                    details=exit_signal.details or {},
+                    details=details,
                     broker_order_id=broker_order_id,
                     exit_ts_utc=datetime.now(UTC),
                 )

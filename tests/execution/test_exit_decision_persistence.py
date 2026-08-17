@@ -48,3 +48,33 @@ async def test_persist_exit_decision_records_rule_and_urgency_but_not_candidate_
     assert row.urgency == "IMMEDIATE"
     assert row.broker_order_id == "broker-1"
     assert row.candidate_id is None, "an ExitDecision row is not closure; PositionManager treats it as terminal"
+
+
+@pytest.mark.asyncio
+async def test_exit_quote_is_stored_alongside_the_signal_details() -> None:
+    """The decision-time market lands in `details.exit_quote` — the exit-side
+    counterpart of the entry's `decision_trace_json.entry_quote`."""
+    details = {"bucket": "SWING", "pnl_pct": -41.0}
+    signal = SimpleNamespace(
+        rule_id="stop_loss_v1", reason="stop loss hit", urgency="IMMEDIATE", confidence=1.0, details=details
+    )
+    quote = {"bid": 0.94, "ask": 1.06, "mid": 1.0, "spread_pct": 0.12, "source": "gateway_option_quote"}
+
+    await persist_exit_decision("AAPL260918P00200000", signal, "orion_exit_2", {"id": "broker-2"}, exit_quote=quote)
+
+    row = await _row("orion_exit_2")
+    assert row.details["exit_quote"] == quote
+    assert row.details["bucket"] == "SWING", "the rule's own details must survive"
+    assert details == {"bucket": "SWING", "pnl_pct": -41.0}, "the caller's details dict must not be mutated"
+
+
+@pytest.mark.asyncio
+async def test_details_are_unchanged_when_no_exit_quote_is_available() -> None:
+    signal = SimpleNamespace(
+        rule_id="time_stop_v1", reason="time stop", urgency="IMMEDIATE", confidence=1.0, details={"bucket": "0DTE"}
+    )
+
+    await persist_exit_decision("SPY260918C00600000", signal, "orion_exit_3", {"id": "broker-3"})
+
+    row = await _row("orion_exit_3")
+    assert row.details == {"bucket": "0DTE"}

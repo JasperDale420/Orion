@@ -18,6 +18,7 @@ from orion.execution.attribution import (
     mint_orion_order_id,
     orion_order_id_sql_pattern,
 )
+from orion.execution.exit_costs import build_exit_quote
 from orion.execution.exit_fallback_rules import bucket_for_dte
 from orion.execution.factor_inputs import compute_candidate_factors, factor_gate_reason
 from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positions
@@ -2216,13 +2217,44 @@ class ExecutionEngine:
             # for ~30 min, and every new full-size close into that window was
             # priced by Alpaca as OPENING a short → 40310000. A marketable limit
             # off the live bid/ask fills immediately and never rests.
-            limit_price = await self._fresh_close_limit(client, ticker, held_short)
+            limit_price, raw_quote = await self._fresh_close_limit(client, ticker, held_short)
+
+            # Record the market this close is priced into, from the quote just
+            # fetched — no extra round-trip, no await. Without it, realized exit
+            # cost (the dominant cost term on short-dated options) is
+            # unmeasurable: a fill price alone can't say whether we paid the
+            # spread or acted on a stale mark. Stamped HERE so `decision_ts`
+            # dates the quote rather than the broker's acknowledgement, and
+            # carried down every close path — including the native escalation,
+            # whose closes are the expensive ones and would otherwise bias the
+            # measured sample. Purely additive: it is wrapped, it feeds nothing
+            # but persistence, and it can neither delay nor fail the close.
+            exit_quote: dict[str, Any] | None
+            try:
+                exit_quote = build_exit_quote(
+                    raw_quote,
+                    mark_used_by_rule=current_price,
+                    source="gateway_option_quote" if raw_quote else "tracked_mark",
+                    decision_ts=datetime.now(UTC),
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Exit quote capture failed for {ticker}: {e}",
+                    extra={"event_type": "EXIT_QUOTE_CAPTURE_FAILED", "ticker": ticker},
+                )
+                exit_quote = {"error": str(e)}
 
             # Fall back to the tracked mark only if no fresh quote is available.
             if limit_price is None or limit_price <= 0:
                 if current_price is None or current_price <= 0:
                     return await self._native_close_escalation(
-                        client, ticker, abs_qty, close_side, exit_signal, "no fresh quote or mark for limit"
+                        client,
+                        ticker,
+                        abs_qty,
+                        close_side,
+                        exit_signal,
+                        "no fresh quote or mark for limit",
+                        exit_quote=exit_quote,
                     )
                 limit_price = self._compute_close_limit(current_price, held_short)
 
@@ -2234,6 +2266,7 @@ class ExecutionEngine:
                     close_side,
                     exit_signal,
                     f"limit priced <= 0 (mark={current_price})",
+                    exit_quote=exit_quote,
                 )
 
             # 1) Primary: orion-attributed marketable LIMIT (keeps the fill
@@ -2262,7 +2295,7 @@ class ExecutionEngine:
                         "reason": getattr(exit_signal, "reason", None),
                     },
                 )
-                await persist_exit_decision(ticker, exit_signal, client_order_id, result)
+                await persist_exit_decision(ticker, exit_signal, client_order_id, result, exit_quote=exit_quote)
                 self._record_result(True)
                 return True
 
@@ -2314,7 +2347,7 @@ class ExecutionEngine:
                 extra={"event_type": "EXIT_LIMIT_REJECTED_ESCALATE", "ticker": ticker, "error": detail[:200]},
             )
             return await self._native_close_escalation(
-                client, ticker, abs_qty, close_side, exit_signal, f"limit rejected: {detail}"
+                client, ticker, abs_qty, close_side, exit_signal, f"limit rejected: {detail}", exit_quote=exit_quote
             )
 
         # ── Equity: market for IMMEDIATE, limit otherwise ──
@@ -2785,10 +2818,14 @@ class ExecutionEngine:
         )
         state.next_eligible = time.monotonic() + backoff + _cancel_backoff_jitter()
 
-    async def _fresh_close_limit(self, client: Any, ticker: str, held_short: bool) -> float | None:
-        """Marketable options close limit from a FRESH chain quote, or ``None``
-        if no usable quote is available (the caller then falls back to the
-        tracked mark).
+    async def _fresh_close_limit(
+        self, client: Any, ticker: str, held_short: bool
+    ) -> tuple[float | None, dict[str, Any] | None]:
+        """Marketable options close limit from a FRESH chain quote, plus the raw
+        quote it was derived from. The limit is ``None`` if no usable quote is
+        available (the caller then falls back to the tracked mark); the raw quote
+        is returned whenever one was retrieved at all, so the caller can record
+        the market it closed into without a second fetch.
 
         SELL-to-close hits the live bid; BUY-to-cover lifts the live ask — both
         immediately marketable, so the close fills instead of resting off-market
@@ -2803,7 +2840,7 @@ class ExecutionEngine:
         """
         getq = getattr(client, "get_option_quote", None)
         if getq is None:
-            return None
+            return None, None
         try:
             quote = await getq(ticker)
         except Exception as e:
@@ -2811,18 +2848,18 @@ class ExecutionEngine:
                 f"Fresh option quote fetch failed for {ticker}: {e}",
                 extra={"event_type": "CLOSE_QUOTE_FETCH_ERROR", "ticker": ticker},
             )
-            return None
+            return None, None
         if not isinstance(quote, dict):
-            return None
+            return None, None
         # Cross into the side we need: bid for a SELL-to-close, ask for a
         # BUY-to-cover. A missing/zero touch on that side → no usable quote.
         touch = quote.get("ask") if held_short else quote.get("bid")
         if not isinstance(touch, (int, float)) or isinstance(touch, bool) or touch <= 0:
-            return None
+            return None, quote
         touch = float(touch)
         tick = 0.10 if touch >= 3.0 else 0.05
         limit = math.ceil(touch / tick) * tick if held_short else math.floor(touch / tick) * tick
-        return round(limit, 2)
+        return round(limit, 2), quote
 
     def _compute_close_limit(self, mark: float, held_short: bool) -> float:
         """Marketable close limit: cross the spread by ~7.5% so the order
@@ -2886,6 +2923,7 @@ class ExecutionEngine:
         close_side: Any,
         exit_signal: Any,
         reason: str,
+        exit_quote: dict[str, Any] | None = None,
     ) -> bool:
         """Last-resort flatten via the Gateway native close (``DELETE
         /positions/{symbol}``), bounded to ``abs_qty``, used only when the
@@ -2897,6 +2935,13 @@ class ExecutionEngine:
         vanished position (404 / POSITION_NOT_FOUND / 40410000) counts as
         already-closed (do NOT submit an opposing order — that could open a
         naked short).
+
+        ``exit_quote`` records the market at the close decision. These are the
+        expensive exits — the attributed limit was unpriceable or rejected — so
+        dropping them would bias any realized-cost measurement toward the cheap
+        ones. There is no orion-attributed fill to pair the record with, so the
+        nightly aggregation counts these as unmeasured rather than measuring
+        them; the record still shows what market the escalation faced.
         """
         client_order_id = mint_orion_order_id()
         native = await client.close_position(ticker, qty=abs_qty)
@@ -2912,7 +2957,7 @@ class ExecutionEngine:
                     "reason": getattr(exit_signal, "reason", None),
                 },
             )
-            await persist_exit_decision(ticker, exit_signal, client_order_id, native)
+            await persist_exit_decision(ticker, exit_signal, client_order_id, native, exit_quote=exit_quote)
             self._record_result(True)
             return True
         if native.get("status_code") == 404 or "POSITION_NOT_FOUND" in native_err or "40410000" in native_err:
