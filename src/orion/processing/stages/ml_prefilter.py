@@ -48,7 +48,12 @@ class MLPreFilter:
         dte = None
         if candidate.expiration_date:
             try:
-                dte = (candidate.expiration_date - candidate.timestamp_utc).days
+                # Calendar-day DTE — same convention as count_open_journal_positions
+                # in orion/execution/persistence.py. A raw datetime subtraction
+                # truncates by wall-clock hours, so a candidate a few hours before
+                # midnight expiring the next calendar day reads as 0 days (0DTE)
+                # instead of the correct 1 (SHORT_SWING).
+                dte = (candidate.expiration_date.date() - candidate.timestamp_utc.date()).days
                 if dte < 0:
                     dte = 0
             except Exception:
@@ -120,8 +125,28 @@ class MLPreFilter:
             # models loaded) so that high-conviction heuristic flows can still
             # reach the solver ensemble.  The heuristic cap (0.55 in live mode)
             # bounds the upside, so this doesn't open the floodgates.
+            #
+            # NOTE (scope): this still keys off scorer.use_heuristic (whether
+            # ANY bucket has a model loaded at all), unchanged from before.
+            # scoring_mode below is the ACTUAL per-candidate path score()
+            # just took, which can be "heuristic" here even while
+            # use_heuristic reads False (a different bucket has a model, or
+            # this call's inference raised and fell back) — in that case the
+            # heuristic score below is compared against the model threshold,
+            # not HEURISTIC_THRESHOLD. That's a pre-existing threshold-
+            # selection gap, not something this observability-only change
+            # alters; flagged separately rather than changed here.
             HEURISTIC_THRESHOLD = 0.40
             ml_threshold = HEURISTIC_THRESHOLD if scorer.use_heuristic else system_settings.ml_prefilter_threshold
+            # Explicit, honest state: a stale/unloadable model artifact, a
+            # bucket with no model loaded, or a mid-call inference exception
+            # all silently drop scoring onto the heuristic fallback with no
+            # trace of which path ran. last_scoring_mode is the scorer's
+            # actual outcome for THIS call — set synchronously as score()'s
+            # last step before returning, so reading it immediately after
+            # the await above (no intervening await) is race-free even with
+            # concurrent candidates sharing the scorer singleton.
+            scoring_mode = scorer.last_scoring_mode
 
             if ml_score < ml_threshold:
                 logger.info(
@@ -131,6 +156,7 @@ class MLPreFilter:
                         "ticker": candidate.ticker,
                         "ml_score": ml_score,
                         "threshold": ml_threshold,
+                        "scoring_mode": scoring_mode,
                     },
                 )
                 return StageResult(
@@ -140,12 +166,13 @@ class MLPreFilter:
                         "ml_prefilter": True,
                         "ml_score": ml_score,
                         "threshold": ml_threshold,
+                        "scoring_mode": scoring_mode,
                     },
                 )
 
             return StageResult(
                 action="CONTINUE",
-                trace={"ml_score": ml_score, "threshold": ml_threshold},
+                trace={"ml_score": ml_score, "threshold": ml_threshold, "scoring_mode": scoring_mode},
             )
 
         except Exception as e:

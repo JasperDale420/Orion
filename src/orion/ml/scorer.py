@@ -77,7 +77,13 @@ class MLScorer:
         self.target = target
         self.models: dict[str, Any] = {}  # bucket -> model_data
         self.feature_names: dict[str, list[str]] = {}  # bucket -> feature names
-        self._model_mtimes: dict[str, float] = {}  # bucket -> last loaded mtime
+        # bucket -> mtime of the file last acted on for that bucket (loaded,
+        # skipped as stale, or failed to load) — check_and_reload() compares
+        # this against the file's current mtime to decide whether a fresh
+        # attempt is warranted, so every branch that decides NOT to load a
+        # present file must still record its mtime here to avoid retrying
+        # (and re-logging) an unchanged file on every reload interval.
+        self._model_mtimes: dict[str, float] = {}
         self._last_reload_check: float = time.monotonic()
         # Tracks (bucket, model_mtime) pairs for which we've already emitted a
         # legacy-fallback warning, so we log once per stale model instead of
@@ -87,6 +93,17 @@ class MLScorer:
         self.model: Any | None = None
         self.use_heuristic: bool = True
         self._bypass_scoring: bool = False
+        # Actual scoring path taken by the most recent score()/score_enriched()
+        # call — "model" or "heuristic". use_heuristic only reflects whether
+        # ANY bucket has a model loaded at all, so it is not a reliable
+        # per-candidate signal: a bucket-specific model-loading gap, or an
+        # exception during THIS call's inference, both fall back to the
+        # heuristic scorer for that one call regardless of the global flag.
+        # Safe to read immediately after awaiting score_enriched() with no
+        # intervening await — see MLPreFilter.evaluate() — because score()
+        # sets this synchronously as its last step before returning, and
+        # asyncio only switches tasks at actual suspension points.
+        self.last_scoring_mode: str = "heuristic"
 
         self._load_models()
         self.use_heuristic = len(self.models) == 0
@@ -126,15 +143,26 @@ class MLScorer:
         loaded_count = 0
         skipped_stale = 0
         loaded_stale = 0
+        files_present = 0
+        load_failures: list[str] = []
         for bucket in TRADE_BUCKETS:
             model_type = f"{bucket}_{self.target}"
             model_path = MODEL_DIR / f"{model_type}.pkl"
 
             if model_path.exists():
+                files_present += 1
                 # Check model freshness before loading
                 from datetime import datetime
 
-                model_mtime = datetime.fromtimestamp(model_path.stat().st_mtime, tz=UTC)
+                # Captured ONCE and reused for every _model_mtimes write below
+                # (skip, failure, success) instead of re-stat'ing the file at
+                # each site: a second stat() call risks observing a DIFFERENT,
+                # newer file if a fresh artifact is dropped mid-attempt, which
+                # would then be wrongly recorded as "already handled" even
+                # though this pass never actually loaded it — silently
+                # suppressing check_and_reload() from ever picking it up.
+                disk_mtime = model_path.stat().st_mtime
+                model_mtime = datetime.fromtimestamp(disk_mtime, tz=UTC)
                 model_age_days = (datetime.now(UTC) - model_mtime).days
                 is_stale = model_age_days > max_age_days
 
@@ -149,6 +177,13 @@ class MLScorer:
                         },
                     )
                     skipped_stale += 1
+                    # Record the observed mtime even though it wasn't loaded —
+                    # same reasoning as the load-failure branch below: without
+                    # this, an unchanged stale-skipped file is seen as newer
+                    # than its 0 default on every periodic reload check,
+                    # re-triggering this skip (and, if no model is active,
+                    # ml_models_unloadable) every reload interval forever.
+                    self._model_mtimes[bucket] = disk_mtime
                     continue
 
                 if is_stale and stale_policy == "warn":
@@ -169,7 +204,7 @@ class MLScorer:
 
                     self.models[bucket] = model_data
                     self.feature_names[bucket] = model_data.get("feature_names", [])
-                    self._model_mtimes[bucket] = model_path.stat().st_mtime
+                    self._model_mtimes[bucket] = disk_mtime
                     loaded_count += 1
                     if is_stale:
                         loaded_stale += 1
@@ -186,12 +221,49 @@ class MLScorer:
                     )
                 except Exception as e:
                     logger.warning(f"Failed to load model {model_type}: {e}")
+                    load_failures.append(f"{model_type}: {type(e).__name__}: {e}")
+                    # Record the failing file's mtime even though it didn't load —
+                    # otherwise check_and_reload() sees this bucket's mtime stuck at
+                    # its 0 default, treats an UNCHANGED broken file as newer than
+                    # loaded on every periodic check, and re-attempts + re-logs
+                    # ml_models_unloadable every reload interval forever. Recording
+                    # it here means a re-log only happens when the file itself
+                    # actually changes (e.g. a new, still-broken artifact is dropped).
+                    self._model_mtimes[bucket] = disk_mtime
 
-        if loaded_count == 0:
-            logger.warning(
-                f"No bucket models found in {MODEL_DIR} — all candidates will use heuristic scorer",
-                extra={"event": "no_models_found", "model_dir": str(MODEL_DIR)},
-            )
+        # Use currently-active model count (self.models), not this pass's
+        # loaded_count: a reload attempt that fails for a bucket whose model
+        # was already loaded from a prior pass leaves that old model in
+        # self.models untouched (never overwritten on failure). loaded_count
+        # alone would then wrongly read 0 and claim "all candidates use
+        # heuristic" while the scorer is still actively using the old model.
+        if len(self.models) == 0:
+            if files_present > 0:
+                # Model files exist on disk but none loaded — a materially
+                # different (and worse) state than a legitimately empty model
+                # directory below. Surfaced loudly since it silently switches
+                # every candidate onto the heuristic scorer.
+                reason = (
+                    "; ".join(load_failures)
+                    if load_failures
+                    else (f"{skipped_stale} model file(s) skipped as stale (policy=skip, max_age_days={max_age_days})")
+                )
+                logger.error(
+                    f"{files_present} model file(s) present in {MODEL_DIR} but 0 loaded "
+                    f"— all candidates will use heuristic scorer",
+                    extra={
+                        "event": "ml_models_unloadable",
+                        "model_dir": str(MODEL_DIR),
+                        "files_present": files_present,
+                        "loaded": loaded_count,
+                        "reason": reason,
+                    },
+                )
+            else:
+                logger.warning(
+                    f"No bucket models found in {MODEL_DIR} — all candidates will use heuristic scorer",
+                    extra={"event": "no_models_found", "model_dir": str(MODEL_DIR)},
+                )
         else:
             summary = f"Loaded {loaded_count}/{len(TRADE_BUCKETS)} bucket models"
             if skipped_stale > 0:
@@ -392,12 +464,14 @@ class MLScorer:
 
         # Check if we have a model for this bucket
         if bucket not in self.models:
+            self.last_scoring_mode = "heuristic"
             return self._heuristic_score(flow)
 
         # Get model and features
         model_data = self.models[bucket]
         model = model_data.get("model")
         if model is None:
+            self.last_scoring_mode = "heuristic"
             return self._heuristic_score(flow)
 
         try:
@@ -436,6 +510,7 @@ class MLScorer:
 
             # Apply confidence rules (post-model adjustments)
             adjusted_prob = self._apply_confidence_rules(float(prob), flow, bucket)
+            self.last_scoring_mode = "model"
             return adjusted_prob
         except Exception as e:
             # Only warn once per (bucket, model_mtime). If the model is
@@ -459,6 +534,7 @@ class MLScorer:
                         "error_type": type(e).__name__,
                     },
                 )
+            self.last_scoring_mode = "heuristic"
             return self._heuristic_score(flow)
 
     def _heuristic_score(self, flow: dict[str, Any]) -> float:
