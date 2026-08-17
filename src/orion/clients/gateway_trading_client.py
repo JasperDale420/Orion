@@ -329,12 +329,33 @@ class GatewayTradingClient:
         """Get latest quote/trade/bar snapshot for a stock."""
         return await self._request("GET", f"/api/v1/alpaca/stocks/{symbol}/snapshot")
 
-    async def get_option_chain(self, underlying: str, limit: int = 1000) -> dict[str, Any]:
-        """Get full options chain for an underlying."""
+    async def get_option_chain(
+        self,
+        underlying: str,
+        *,
+        expiration_date: str | None = None,
+        option_type: str | None = None,
+        strike_price_gte: float | None = None,
+        strike_price_lte: float | None = None,
+    ) -> dict[str, Any]:
+        """Get an options chain for an underlying, optionally narrowed
+        server-side to an exact expiration, option type ("call"/"put"), and
+        strike range. Callers pricing one already-identified contract should
+        pass all three so the Gateway returns a handful of contracts instead
+        of the full chain; omitting them returns the full chain unchanged."""
+        params: dict[str, Any] = {}
+        if expiration_date is not None:
+            params["expiration_date"] = expiration_date
+        if option_type is not None:
+            params["option_type"] = option_type
+        if strike_price_gte is not None:
+            params["strike_price_gte"] = strike_price_gte
+        if strike_price_lte is not None:
+            params["strike_price_lte"] = strike_price_lte
         return await self._request(
             "GET",
             f"/api/v1/alpaca/options/chain/{underlying}",
-            params={"limit": limit},
+            params=params,
         )
 
     async def get_option_quote(self, option_symbol: str) -> dict[str, Any]:

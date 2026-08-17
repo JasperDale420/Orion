@@ -251,6 +251,67 @@ async def test_get_option_quote_caches_chain_per_underlying() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_option_chain_forwards_filters_as_query_params() -> None:
+    """`get_option_chain` must forward expiration/type/strike filters as query
+    params so the Gateway can narrow its response. Previously the client only
+    ever sent a `limit` param the Gateway route doesn't declare (silently
+    ignored), so pricing ONE known contract paged the entire chain — ~6s for
+    SPY, pushing batch-mates over the freshness budget."""
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+
+    mock_response = MagicMock()
+    mock_response.json = MagicMock(return_value={"data": {"underlying": "SPY", "contracts": []}})
+    mock_response.raise_for_status = MagicMock(return_value=None)
+
+    mock_httpx = MagicMock()
+    mock_httpx.request = AsyncMock(return_value=mock_response)
+    mock_httpx.is_closed = False
+    client._client = mock_httpx
+
+    await client.get_option_chain(
+        "SPY",
+        expiration_date="2026-08-21",
+        option_type="call",
+        strike_price_gte=549.0,
+        strike_price_lte=551.0,
+    )
+
+    assert mock_httpx.request.call_count == 1
+    method = mock_httpx.request.call_args.args[0]
+    path = mock_httpx.request.call_args.args[1]
+    params = mock_httpx.request.call_args.kwargs.get("params") or {}
+
+    assert method == "GET"
+    assert path == "/api/v1/alpaca/options/chain/SPY"
+    assert params.get("expiration_date") == "2026-08-21"
+    assert params.get("option_type") == "call"
+    assert params.get("strike_price_gte") == 549.0
+    assert params.get("strike_price_lte") == 551.0
+    assert "limit" not in params, "the dead `limit` param (ignored by the Gateway route) must be dropped"
+
+
+@pytest.mark.asyncio
+async def test_get_option_chain_omits_filters_when_not_given() -> None:
+    """Callers that only know the underlying (e.g. `get_option_quote`) must
+    keep getting the full unfiltered chain — no filter params sent."""
+    client = GatewayTradingClient(base_url="http://gateway", api_key="test")
+
+    mock_response = MagicMock()
+    mock_response.json = MagicMock(return_value={"data": {"underlying": "SPY", "contracts": []}})
+    mock_response.raise_for_status = MagicMock(return_value=None)
+
+    mock_httpx = MagicMock()
+    mock_httpx.request = AsyncMock(return_value=mock_response)
+    mock_httpx.is_closed = False
+    client._client = mock_httpx
+
+    await client.get_option_chain("SPY")
+
+    params = mock_httpx.request.call_args.kwargs.get("params") or {}
+    assert params == {}
+
+
+@pytest.mark.asyncio
 async def test_get_orders_forwards_submitted_at_window_params() -> None:
     """``get_orders`` serializes the additive after/until/nested params other
     callers depend on (tz-aware ISO-8601, nested flag)."""

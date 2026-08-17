@@ -47,6 +47,11 @@ _INDEX_UNDERLYINGS = frozenset({"SPY", "QQQ", "IWM"})
 # each bucket's max-hold horizon; 0DTE closes same-day so it's exempt.
 _EARNINGS_EXCLUSION_DAYS = {"SHORT_SWING": 3, "SWING": 8, "POSITION": 8}
 
+# Half-width of the strike filter sent with the entry-pricing chain fetch.
+# Wide enough to absorb any float-precision noise in the stored strike,
+# tight enough to cut a full chain (hundreds of strikes) down to a handful.
+_CHAIN_STRIKE_FILTER_WINDOW = 1.0
+
 # Daily per-ticker cache for the Gateway earnings lookup: only execute-stage
 # candidates hit it (tens/day), and earnings dates don't move intraday.
 _earnings_cache: dict[tuple[str, str], int | None] = {}
@@ -1027,12 +1032,31 @@ class ExecutionEngine:
 
         # Always fetch live option chain for current pricing — candidate.premium
         # is signal-time data and may be stale. Live mid/ask is needed for
-        # accurate order sizing, risk checks, and limit price.
+        # accurate order sizing, risk checks, and limit price. Narrowed to the
+        # candidate's known expiry/type/strike so pricing ONE contract doesn't
+        # page the full chain (e.g. ~6s for SPY). Filtering is all-or-nothing:
+        # any one of expiration/type/strike missing falls back to the exact
+        # unfiltered fetch (matches prior behaviour) rather than risk a partial
+        # filter excluding the true contract before the contract_symbol match
+        # below ever runs.
         option_price = None
         contract_greeks: dict[str, float] | None = None
         bid_f = ask_f = 0.0
         client = self._get_gateway_client()
-        chain_result = await client.get_option_chain(candidate.ticker)
+        chain_expiration_date = chain_option_type = None
+        chain_strike_gte = chain_strike_lte = None
+        if candidate.expiration_date and candidate.option_type and candidate.strike_price is not None:
+            chain_expiration_date = candidate.expiration_date.date().isoformat()
+            chain_option_type = candidate.option_type.lower()
+            chain_strike_gte = candidate.strike_price - _CHAIN_STRIKE_FILTER_WINDOW
+            chain_strike_lte = candidate.strike_price + _CHAIN_STRIKE_FILTER_WINDOW
+        chain_result = await client.get_option_chain(
+            candidate.ticker,
+            expiration_date=chain_expiration_date,
+            option_type=chain_option_type,
+            strike_price_gte=chain_strike_gte,
+            strike_price_lte=chain_strike_lte,
+        )
 
         if "error" not in chain_result and candidate.option_symbol:
             contracts = chain_result.get("contracts", [])
