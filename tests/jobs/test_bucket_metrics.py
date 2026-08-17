@@ -428,6 +428,70 @@ async def test_an_unrelated_in_window_fill_does_not_widen_the_ledger_read():
 
 
 @pytest.mark.asyncio
+async def test_an_unquoted_equity_exit_does_not_widen_the_ledger_read():
+    """`persist_exit_decision` always writes a details dict, so "has details" is
+    NOT "has a capture". If an ordinary equity exit's ticker reached the scan
+    scope it would put the UNDERLYING in the predicate and pull in every
+    historical option lot on it — an option lot's journal ticker IS the
+    underlying."""
+    await init_db()
+    entered = datetime.now(UTC) - timedelta(days=2)
+    exited = entered + timedelta(hours=6)
+    async with async_session_factory() as session:
+        # A quoted close whose contract matches no lot: on its own it can only
+        # ever be an unbridged fill.
+        _seed_quoted_exit_with_fill(session, ticker="ZZZZ260918C00100000", exit_order_id="unmatched_order")
+        # An ordinary AAPL equity exit — details, but no capture.
+        session.add(
+            ExitDecision(
+                exit_id="orion_equity_exit",
+                ticker="AAPL",
+                rule_id="stop_loss_v1",
+                exit_reason="test",
+                exit_ts_utc=exited,
+                broker_order_id="equity_order",
+                details={"bucket": "SWING", "pnl_pct": -5.0},
+            )
+        )
+        # A historical AAPL lot the equity ticker would drag into scope.
+        candidate_id = f"cand_{uuid.uuid4().hex[:10]}"
+        session.add(
+            CandidateTrade(
+                candidate_id=candidate_id,
+                ticker="AAPL",
+                timestamp_utc=entered,
+                rule_id="rule_swing_v2",
+                direction="LONG",
+                expiration_date=entered + timedelta(days=10),
+                evidence={},
+            )
+        )
+        session.add(
+            TradeJournalEntry(
+                decision_id=f"dec_{uuid.uuid4().hex[:10]}",
+                signal_id="sig",
+                candidate_id=candidate_id,
+                ticker="AAPL",
+                direction="LONG",
+                filled_qty=1.0,
+                filled_avg_price=2.0,
+                filled_at_utc=entered,
+                exit_filled_at_utc=exited,
+                exit_broker_order_id="unmatched_order",
+                realized_pnl=10.0,
+                raw_json={"exit_allocations": [{"order_id": "unmatched_order", "qty": 1.0, "price": 0.95}]},
+            )
+        )
+        await session.commit()
+
+    coverage = (await compute_bucket_metrics(days=30))["exit_cost_coverage"]
+
+    assert coverage["quoted_exits"] == 1, "only the row carrying a capture is an exit we claim to measure"
+    assert coverage["filled_without_journal_bridge"] == 1
+    assert coverage["measured"] == 0, "the AAPL lot must stay out of scope"
+
+
+@pytest.mark.asyncio
 async def test_a_lot_with_no_candidate_row_is_not_guessed_into_a_bucket():
     """`bucket_for_dte(None)` defaults to SWING. A lot with no candidate row has
     no derivable DTE at all, so accepting that default would charge an unknown

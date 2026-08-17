@@ -225,14 +225,17 @@ async def compute_bucket_metrics(days: int = 30) -> dict[str, Any]:
         # allocator resolves underlying-ticker lots too) — those must stay in
         # the map as a bucket we cannot name, not vanish and leave a mixed close
         # looking single-bucket.
-        # Only the contracts of exits that CLAIM a capture — a close is
+        # Only the contracts of exits that actually CARRY a capture — a close is
         # measurable only if it has one, and its exit_decisions row carries the
-        # same contract the fill does. Widening this to every in-window fill
-        # would drag in unrelated symbols, and an equity ticker there would pull
-        # every historical option lot on that underlying (an option lot's
-        # journal `ticker` IS the underlying). Quotes are captured on the
-        # options close path only, so these are contract symbols.
-        contracts = {t for (*_, t) in quoted_exits if t}
+        # same contract the fill does. The `details IS NOT NULL` filter above is
+        # NOT that test: `persist_exit_decision` always writes a details dict, so
+        # every exit passes it, including equity exits and rows written before
+        # capture existed. An equity ticker reaching this set would put the
+        # UNDERLYING in the OR predicate below and pull in every historical
+        # option lot on it — an option lot's journal `ticker` is the underlying.
+        contracts = {
+            t for (*_, details, t) in quoted_exits if t and isinstance(details, dict) and "exit_quote" in details
+        }
         allocated = []
         if contracts:
             allocated = (
