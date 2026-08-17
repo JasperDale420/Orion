@@ -1,10 +1,12 @@
 """`persist_exit_decision` records the exit signal as it actually fired.
 
 `exit_decisions.rule_id` / `urgency` are the audit trail for WHICH exit rule
-closed a position, and `candidate_id` is what `bucket_metrics` and
-`PositionManager` join back to the entry on. A signal that carries a candidate
-id must land it in the row; older callers whose signals do not carry one
-still persist (column stays NULL).
+closed a position. `candidate_id` is deliberately NOT written at close
+submission: `PositionManager.initialize()` outer-joins `ExitDecision` on
+`candidate_id` and treats any row as terminal, so linking at submission would
+drop an accepted-but-unfilled, cancelled, or partially-filled close from the
+rule-based recovery path after a restart. A row here means "a close was
+submitted", not "the position is closed".
 """
 
 from __future__ import annotations
@@ -28,12 +30,13 @@ async def _row(exit_id: str) -> ExitDecision:
 
 
 @pytest.mark.asyncio
-async def test_persist_exit_decision_records_rule_urgency_and_candidate() -> None:
+async def test_persist_exit_decision_records_rule_and_urgency_but_not_candidate_link() -> None:
     signal = SimpleNamespace(
         rule_id="stop_loss_v1",
         reason="stop loss hit: return=-41.0% <= -40.0%",
-        urgency="SOON",
+        urgency="IMMEDIATE",
         confidence=1.0,
+        # Even a signal that carries the entry candidate must not link the row.
         candidate_id="cand-777",
         details={"bucket": "SWING", "pnl_pct": -41.0},
     )
@@ -42,23 +45,6 @@ async def test_persist_exit_decision_records_rule_urgency_and_candidate() -> Non
 
     row = await _row("orion_exit_1")
     assert row.rule_id == "stop_loss_v1"
-    assert row.urgency == "SOON"
-    assert row.candidate_id == "cand-777"
+    assert row.urgency == "IMMEDIATE"
     assert row.broker_order_id == "broker-1"
-
-
-@pytest.mark.asyncio
-async def test_persist_exit_decision_without_candidate_leaves_column_null() -> None:
-    signal = SimpleNamespace(
-        rule_id="ml_exit_SWING",
-        reason="ML exit score: 0.80",
-        urgency="IMMEDIATE",
-        confidence=0.8,
-        details={},
-    )
-
-    await persist_exit_decision("AAPL", signal, "orion_exit_2", None)
-
-    row = await _row("orion_exit_2")
-    assert row.rule_id == "ml_exit_SWING"
-    assert row.candidate_id is None
+    assert row.candidate_id is None, "an ExitDecision row is not closure; PositionManager treats it as terminal"

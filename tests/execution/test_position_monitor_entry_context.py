@@ -392,7 +392,6 @@ async def test_entry_context_arriving_after_timeout_is_applied_to_tracked_positi
     real_entry_ts = datetime.now(UTC) - timedelta(hours=3)
     real_context = {
         "decision_id": "dec-late",
-        "candidate_id": "cand-late",
         "option_symbol": symbol,
         "premium_usd": 1200.0,
         "dte": 5,
@@ -423,7 +422,6 @@ async def test_entry_context_arriving_after_timeout_is_applied_to_tracked_positi
     assert same_pos is pos
     assert pos.bucket == "SWING"
     assert pos.decision_id == "dec-late"
-    assert pos.candidate_id == "cand-late"
     assert pos.entry_time == real_entry_ts
     assert pos.premium_usd == 1200.0
     assert pos.expiry_date == _expiry_from_occ_symbol(symbol)

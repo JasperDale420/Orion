@@ -313,7 +313,6 @@ def test_evaluate_exits_deterministic_barrier_still_fires():
     assert pos.symbol == "SWING_POS"
     assert pred.should_exit is True
     assert pred.rule_id == "stop_loss_v1"
-    assert pred.urgency == "IMMEDIATE"
 
 
 def test_evaluate_exits_uses_model_when_loaded():
@@ -339,3 +338,94 @@ def test_evaluate_exits_uses_model_when_loaded():
 
     assert predict_called_for == ["SWING"]
     assert [(pos.symbol, pred.reasoning) for pos, pred in signals] == [("SWING_POS", "ML exit score: 0.90")]
+
+
+# --- Test 8-10: a raising policy evaluation fails CLOSED, never to "no policy" -
+#
+# With the classifier bypassed when no model is loaded, an exception inside the
+# deterministic evaluation (a bad ORION_EXIT_BUCKET_OVERRIDES entry, schema
+# drift on expiry_date, …) must not leave the position with no exit policy at
+# all. The evaluation is retried with the unoverridden bucket defaults; only if
+# that also raises does the classifier become the last resort.
+
+
+def test_policy_exception_retries_with_default_barriers(monkeypatch):
+    """First evaluation raises; the retry with DEFAULT_BUCKET_PARAMS is what
+    fires, and the classifier is never consulted."""
+    from orion.execution import exit_fallback_rules as efr
+
+    seen_params: list[object] = []
+    real_fn = efr.evaluate_fallback_rules
+
+    def _raise_once(position, **kwargs):
+        seen_params.append(kwargs["params"])
+        if len(seen_params) == 1:
+            raise RuntimeError("synthetic override failure")
+        return real_fn(position, **kwargs)
+
+    monkeypatch.setattr(efr, "evaluate_fallback_rules", _raise_once)
+
+    monitor = _build_monitor_with_classifier(_NoModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-45.0, bucket="SWING"),
+    }
+
+    signals = monitor.evaluate_exits()
+
+    assert len(seen_params) == 2
+    assert seen_params[1] == efr.DEFAULT_BUCKET_PARAMS["SWING"], "retry must use the unoverridden defaults"
+    assert [(pos.symbol, pred.rule_id) for pos, pred in signals] == [("SWING_POS", "stop_loss_v1")]
+
+
+def test_policy_exception_on_both_attempts_falls_back_to_classifier_and_pages(monkeypatch, caplog):
+    """Both evaluations raise: CRITICAL EXIT_POLICY_EVALUATION_FAILED, and the
+    classifier IS consulted for that position even though no model is loaded."""
+    import logging
+
+    from orion.execution import exit_fallback_rules as efr
+
+    def _always_raise(position, **kwargs):
+        raise RuntimeError("synthetic policy failure")
+
+    monkeypatch.setattr(efr, "evaluate_fallback_rules", _always_raise)
+
+    predict_called_for: list[str] = []
+
+    class _NoModelButConsulted:
+        models: dict = {}
+
+        def predict(self, features):
+            predict_called_for.append(features.bucket)
+            return SimpleNamespace(should_exit=False, confidence=0.0, reasoning="hold")
+
+    monitor = _build_monitor_with_classifier(_NoModelButConsulted())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-45.0, bucket="SWING"),
+    }
+
+    caplog.set_level(logging.ERROR, logger="orion.execution.position_monitor")
+    signals = monitor.evaluate_exits()
+
+    assert predict_called_for == ["SWING"], "classifier is the last resort when the policy cannot be evaluated"
+    assert signals == []
+    critical = [r for r in caplog.records if r.levelno == logging.CRITICAL]
+    assert any("EXIT_POLICY_EVALUATION_FAILED" in r.getMessage() for r in critical), (
+        f"expected an EXIT_POLICY_EVALUATION_FAILED critical, got: {[r.getMessage() for r in critical]}"
+    )
+
+
+def test_disaster_valve_still_fires_when_override_path_raises(monkeypatch):
+    """A malformed ORION_EXIT_BUCKET_OVERRIDES entry makes resolve_exit_params
+    raise; a -70% position must still exit on the default disaster valve."""
+    from orion.config import system_settings
+
+    monkeypatch.setattr(system_settings, "exit_bucket_overrides", {"SWING": {"not_a_field": 1}})
+
+    monitor = _build_monitor_with_classifier(_NoModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-70.0, bucket="SWING"),
+    }
+
+    signals = monitor.evaluate_exits()
+
+    assert [(pos.symbol, pred.rule_id) for pos, pred in signals] == [("SWING_POS", "disaster_valve_v1")]

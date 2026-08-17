@@ -128,11 +128,12 @@ class TestPositionMonitorRouting:
         assert "pnl_pct" in exit_signal.details
 
     @pytest.mark.asyncio
-    async def test_execute_exits_persists_real_rule_id_and_urgency(self) -> None:
+    async def test_execute_exits_persists_real_rule_id_and_keeps_immediate_urgency(self) -> None:
         """A deterministic-rule exit reaches close_position (and so exit_decisions)
-        under its own rule_id and urgency, linked to the entry candidate — not
-        relabelled `ml_exit_<bucket>` / IMMEDIATE. Every July 2026 exit_decisions
-        row read ml_exit_*, so which rule actually fired was unrecoverable."""
+        under its own rule_id — not relabelled `ml_exit_<bucket>` (every July 2026
+        exit_decisions row read ml_exit_*, so which rule fired was unrecoverable).
+        Urgency stays IMMEDIATE: close_position keys equity market-vs-limit
+        routing on it, and a monitor exit is always meant to close now."""
         engine = MagicMock()
         engine.close_position = AsyncMock(return_value=True)
 
@@ -140,13 +141,13 @@ class TestPositionMonitorRouting:
         monitor = PositionMonitor(execution_engine=engine, position_manager=pm)
 
         pos = _tracked_position(symbol="AAPL260918P00200000", qty=2.0, bucket="SWING")
-        pos.candidate_id = "cand-777"
-        # The shape evaluate_exits produces when a fallback rule fires.
+        # The shape evaluate_exits produces when a fallback rule fires. A rule's
+        # own SOON urgency must NOT reach the close request.
         prediction = SimpleNamespace(
             should_exit=True,
             confidence=1.0,
-            reasoning="stop loss hit: return=-41.0% <= -40.0%",
-            rule_id="stop_loss_v1",
+            reasoning="profit target hit: return=+61.0% >= target=60.0%",
+            rule_id="profit_target_v1",
             urgency="SOON",
         )
         connector = MagicMock()
@@ -156,10 +157,9 @@ class TestPositionMonitorRouting:
                 await monitor.execute_exits(connector, [(pos, prediction)], dry_run=False)
 
         exit_signal = engine.close_position.call_args.kwargs["exit_signal"]
-        assert exit_signal.rule_id == "stop_loss_v1"
-        assert exit_signal.urgency == "SOON"
-        assert exit_signal.candidate_id == "cand-777"
-        assert exit_signal.reason == "stop loss hit: return=-41.0% <= -40.0%"
+        assert exit_signal.rule_id == "profit_target_v1"
+        assert exit_signal.urgency == "IMMEDIATE"
+        assert exit_signal.reason == "profit target hit: return=+61.0% >= target=60.0%"
 
     @pytest.mark.asyncio
     async def test_falls_back_to_connector_when_no_engine(self) -> None:
