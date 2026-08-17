@@ -1179,9 +1179,16 @@ class IngestionService:
         session as complete on True, so a failure is retried rather than lost.
         """
         try:
-            from orion.execution.persistence import realize_expired_journal_rows
+            from orion.execution.persistence import (
+                realize_expired_journal_rows,
+                reconcile_journal_exits_from_fills,
+            )
             from orion.jobs.reconcile_pnl import STATUS_BROKER_UNAVAILABLE, run_reconciliation
 
+            # Attribute any recorded sell fill the live path missed BEFORE the
+            # expiry sweep, so a lot that was actually sold is never booked as
+            # expired-worthless (2026-08-13: 25 sold July lots swept at -100%).
+            await reconcile_journal_exits_from_fills()
             await realize_expired_journal_rows()
             result = await run_reconciliation(trading_date)
         except Exception as e:

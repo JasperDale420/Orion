@@ -1,10 +1,11 @@
 """Database persistence for execution records (orders, fills, trade journal)."""
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import func, or_, select, update
 
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.decorators import db_retry
@@ -486,77 +487,279 @@ async def persist_fill_record(fill: Any) -> None:
         raise
 
 
-async def persist_realized_pnl_to_journal(
-    ticker: str,
-    realized_pnl: float,
-    exit_broker_order_id: str | None = None,
-    filled_at: datetime | None = None,
-    exit_qty: float | None = None,
-    exit_price: float | None = None,
-) -> None:
-    """Attribute realized PnL from a closing fill back to the originating
-    entry's trade-journal row.
+@dataclass(frozen=True)
+class ExitAllocationResult:
+    """Outcome of allocating one closing order's cumulative fill across journal lots."""
 
-    B2 RCA: ``persist_fill_record`` updates the journal by ``broker_order_id``,
-    but an EXIT fill's ``broker_order_id`` never matches the ENTRY journal row
-    (which carries the *entry* order ids) — so ``realized_pnl`` stayed NULL for
-    every trade and EOD/weekly PnL reporting was blind. The only stable link
-    across the entry/exit boundary on the shared account is ``ticker``: match
-    the oldest still-open entry (``broker_order_id`` set = actually entered;
-    ``realized_pnl`` NULL = not yet closed). Exact for the common single-fill
-    full close; a multi-partial close attributes the first increment's PnL
-    (acceptable — far better than recording nothing).
+    allocated_qty: float = 0.0
+    closed_rows: int = 0
+    unmatched_qty: float = 0.0
 
-    Exit data is written to the exit_* columns — entry fill fields
-    (filled_qty, filled_avg_price, filled_at_utc) are never touched here so
-    that entry provenance is preserved for cost-basis reconstruction and
-    round-trip audit (B3 RCA 2026-06-11).
 
-    Defensive: any DB failure is logged, never raised — a journal side-write
-    must not break fill processing or the risk/kill-switch path.
+def _journal_multiplier(contract: str) -> float:
+    """Dollars per 1.00 of quoted price: 100 for an OCC option contract, 1 for equity."""
+    from orion.execution.attribution import is_occ_option_symbol
+
+    return 100.0 if is_occ_option_symbol(contract) else 1.0
+
+
+def _ledger(row: Any) -> list[dict[str, Any]]:
+    raw = row.raw_json if isinstance(row.raw_json, dict) else {}
+    legs = raw.get("exit_allocations")
+    return list(legs) if isinstance(legs, list) else []
+
+
+def _apply_exit_leg(
+    row: Any, *, multiplier: float, order_id: str, qty: float, price: float, at: datetime | None, source: str
+) -> bool:
+    """Book one exit leg onto a journal lot. Returns True when the lot is now fully closed.
+
+    Cumulative exit fields and the per-order ledger in ``raw_json`` are the
+    durable state; ``realized_pnl`` is written only when the lot's whole entry
+    quantity has been closed, so a partially closed lot keeps counting toward the
+    entry caps (``count_open_journal_positions`` reads ``realized_pnl IS NULL``).
+    The JSON column is reassigned rather than mutated in place — SQLAlchemy's
+    plain ``JSON`` type does not track in-place mutation, and an unpersisted
+    ledger would let a retry re-allocate the same order.
+    """
+    prev_qty = float(row.exit_filled_qty or 0.0)
+    prev_avg = float(row.exit_filled_avg_price or 0.0)
+    new_qty = prev_qty + qty
+    new_avg = ((prev_qty * prev_avg) + (qty * price)) / new_qty if new_qty > 0 else 0.0
+
+    legs = _ledger(row)
+    legs.append(
+        {
+            "order_id": order_id,
+            "qty": float(qty),
+            "price": float(price),
+            "at": at.isoformat() if isinstance(at, datetime) else None,
+            "source": source,
+        }
+    )
+    raw = dict(row.raw_json) if isinstance(row.raw_json, dict) else {}
+    raw["exit_allocations"] = legs
+    row.raw_json = raw
+
+    row.exit_filled_qty = new_qty
+    row.exit_filled_avg_price = new_avg
+    row.exit_broker_order_id = order_id
+    if at is not None:
+        row.exit_filled_at_utc = at
+
+    entry_qty = float(row.filled_qty or 0.0)
+    if new_qty + 1e-9 >= entry_qty:
+        row.realized_pnl = (new_avg - float(row.filled_avg_price or 0.0)) * entry_qty * multiplier
+        row.notes = f"closed_by={order_id}"
+        return True
+    return False
+
+
+async def allocate_exit_in_session(
+    session: Any,
+    *,
+    contract: str,
+    order_id: str,
+    order_cum_qty: float,
+    order_cum_avg_price: float,
+    filled_at: datetime | None,
+    source: str,
+) -> ExitAllocationResult:
+    """Allocate a closing order's CUMULATIVE fill across the open journal lots of ``contract``.
+
+    ``contract`` is what the broker fill carries — the OCC option symbol
+    (``NVDA260708C00190000``) — while journal rows carry the underlying, so lots
+    are resolved through the candidate's ``option_symbol`` (ticker equality is the
+    fallback for lots with no candidate contract, e.g. equity).
+
+    Idempotent per order: the broker reports cumulative ``filled_qty`` /
+    ``filled_avg_price``; the new leg is the delta between those figures and what
+    the ledger already holds for ``order_id`` across all lots of the contract, so
+    a duplicate delivery (live path then EOD reconcile, or two live processes)
+    allocates nothing, and a later partial fill at a different price yields the
+    correct per-leg price rather than the cumulative average. Lots are filled
+    oldest-first; each lot's P&L is computed from its own entry and exit legs.
+
+    Rows are locked ``FOR UPDATE`` on PostgreSQL so concurrent allocators
+    serialize per contract (SQLite ignores the clause; the DB-level retry wrapper
+    is the only guard there).
     """
     from orion.storage.models_trade_journal import TradeJournalEntry
 
-    async def write(session: Any) -> None:
-        stmt = (
-            select(TradeJournalEntry)
-            .where(
-                TradeJournalEntry.ticker == ticker,
-                TradeJournalEntry.broker_order_id.is_not(None),
-                TradeJournalEntry.realized_pnl.is_(None),
-            )
-            .order_by(TradeJournalEntry.created_at_utc.asc())
-            .limit(1)
+    stmt = (
+        select(TradeJournalEntry, CandidateTrade.option_symbol)
+        .outerjoin(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
+        .where(
+            or_(CandidateTrade.option_symbol == contract, TradeJournalEntry.ticker == contract),
+            TradeJournalEntry.broker_order_id.is_not(None),
+            TradeJournalEntry.filled_at_utc.is_not(None),
+            TradeJournalEntry.filled_qty.is_not(None),
         )
-        row = (await session.execute(stmt)).scalars().first()
-        if row is None:
-            logger.warning(
-                "No open trade-journal entry to attribute realized PnL",
-                extra={
-                    "event_type": "REALIZED_PNL_NO_OPEN_JOURNAL_ENTRY",
-                    "ticker": ticker,
-                    "realized_pnl": realized_pnl,
-                },
-            )
-            return
-        row.realized_pnl = float(realized_pnl)
-        if exit_broker_order_id:
-            row.exit_broker_order_id = exit_broker_order_id
-            row.notes = f"closed_by={exit_broker_order_id}"
-        if filled_at is not None:
-            row.exit_filled_at_utc = filled_at
-        if exit_qty is not None:
-            row.exit_filled_qty = exit_qty
-        if exit_price is not None:
-            row.exit_filled_avg_price = exit_price
+        .order_by(TradeJournalEntry.created_at_utc.asc(), TradeJournalEntry.decision_id.asc())
+        .with_for_update(of=TradeJournalEntry)
+    )
+    rows = (await session.execute(stmt)).all()
 
-    try:
-        await db_write(write)
-    except Exception as e:
-        logger.error(
-            "Failed to write realized PnL to trade journal",
-            extra={"event_type": "REALIZED_PNL_JOURNAL_WRITE_ERROR", "ticker": ticker, "error": str(e)},
+    already_qty = 0.0
+    already_value = 0.0
+    for row, _ in rows:
+        for leg in _ledger(row):
+            if leg.get("order_id") == order_id:
+                q = float(leg.get("qty") or 0.0)
+                already_qty += q
+                already_value += q * float(leg.get("price") or 0.0)
+
+    leg_qty = float(order_cum_qty) - already_qty
+    if leg_qty <= 1e-9:
+        return ExitAllocationResult()
+    leg_value = float(order_cum_qty) * float(order_cum_avg_price) - already_value
+    leg_price = leg_value / leg_qty
+    if leg_price <= 0:
+        logger.warning(
+            "Exit leg price derived from cumulative figures is non-positive; using cumulative average",
+            extra={
+                "event_type": "EXIT_ALLOCATION_LEG_PRICE_FALLBACK",
+                "contract": contract,
+                "order_id": order_id,
+                "leg_price": leg_price,
+            },
         )
+        leg_price = float(order_cum_avg_price)
+
+    multiplier = _journal_multiplier(contract)
+    remaining = leg_qty
+    closed = 0
+    allocated = 0.0
+    for row, _option_symbol in rows:
+        if remaining <= 1e-9:
+            break
+        if row.realized_pnl is not None:
+            continue
+        capacity = float(row.filled_qty or 0.0) - float(row.exit_filled_qty or 0.0)
+        if capacity <= 1e-9:
+            continue
+        take = min(capacity, remaining)
+        if _apply_exit_leg(
+            row,
+            multiplier=multiplier,
+            order_id=order_id,
+            qty=take,
+            price=leg_price,
+            at=filled_at,
+            source=source,
+        ):
+            closed += 1
+        remaining -= take
+        allocated += take
+
+    if remaining > 1e-9:
+        logger.warning(
+            "Closing fill has no open journal lot to attribute to",
+            extra={
+                "event_type": "EXIT_ALLOCATION_UNMATCHED",
+                "contract": contract,
+                "order_id": order_id,
+                "unmatched_qty": remaining,
+                "source": source,
+            },
+        )
+    return ExitAllocationResult(allocated_qty=allocated, closed_rows=closed, unmatched_qty=remaining)
+
+
+async def allocate_exit_to_journal(
+    *,
+    contract: str,
+    order_id: str,
+    order_cum_qty: float,
+    order_cum_avg_price: float,
+    filled_at: datetime | None,
+    source: str,
+) -> ExitAllocationResult:
+    """`allocate_exit_in_session` in its own write transaction (the live fill path)."""
+
+    async def write(session: Any) -> ExitAllocationResult:
+        return await allocate_exit_in_session(
+            session,
+            contract=contract,
+            order_id=order_id,
+            order_cum_qty=order_cum_qty,
+            order_cum_avg_price=order_cum_avg_price,
+            filled_at=filled_at,
+            source=source,
+        )
+
+    return await db_write(write)
+
+
+async def reconcile_exits_in_session(session: Any) -> int:
+    """Attribute Orion-owned SELL fills recorded in ``fills`` to any journal lot still open.
+
+    Heals closes the live path missed (a fill polled while the risk manager had
+    no in-memory position, a restart between the broker fill and the poll, an
+    out-of-order partial). Runs at EOD before the expiry sweep so a lot that was
+    actually sold is never booked as expired. Idempotent: the allocator's
+    per-order ledger caps every order at its cumulative filled quantity.
+
+    Returns the number of lots fully closed by this pass.
+    """
+    from orion.execution.attribution import orion_order_id_sql_pattern
+    from orion.storage.models_execution import FillRecord
+    from orion.storage.models_trade_journal import TradeJournalEntry
+
+    contract_expr = func.coalesce(CandidateTrade.option_symbol, TradeJournalEntry.ticker)
+    stmt = (
+        select(contract_expr.label("contract"), func.min(TradeJournalEntry.filled_at_utc).label("first_entry"))
+        .select_from(TradeJournalEntry)
+        .outerjoin(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
+        .where(
+            TradeJournalEntry.broker_order_id.is_not(None),
+            TradeJournalEntry.filled_at_utc.is_not(None),
+            TradeJournalEntry.filled_qty.is_not(None),
+            TradeJournalEntry.realized_pnl.is_(None),
+        )
+        .group_by(contract_expr)
+    )
+    open_contracts = list((await session.execute(stmt)).all())
+
+    closed = 0
+    for contract, first_entry in open_contracts:
+        fstmt = (
+            select(FillRecord)
+            .where(
+                FillRecord.ticker == contract,
+                func.lower(FillRecord.side) == "sell",
+                FillRecord.client_order_id.like(orion_order_id_sql_pattern()),
+                FillRecord.filled_at_utc.is_not(None),
+                FillRecord.filled_at_utc >= first_entry,
+                FillRecord.filled_qty > 0,
+            )
+            .order_by(FillRecord.filled_at_utc.asc())
+        )
+        for fill in (await session.execute(fstmt)).scalars().all():
+            avg_price = float(fill.filled_avg_price or 0.0)
+            if avg_price <= 0:
+                continue
+            result = await allocate_exit_in_session(
+                session,
+                contract=contract,
+                order_id=fill.broker_order_id,
+                order_cum_qty=float(fill.filled_qty),
+                order_cum_avg_price=avg_price,
+                filled_at=fill.filled_at_utc,
+                source="eod_reconcile",
+            )
+            closed += result.closed_rows
+    if closed:
+        logger.info(
+            f"EOD fill reconcile closed {closed} journal lots from recorded sell fills",
+            extra={"event_type": "JOURNAL_FILL_RECONCILE_DONE", "closed": closed},
+        )
+    return closed
+
+
+async def reconcile_journal_exits_from_fills() -> int:
+    """`reconcile_exits_in_session` in its own write transaction (the EOD close-of-books)."""
+    return await db_write(reconcile_exits_in_session)
 
 
 async def count_open_journal_positions() -> tuple[dict[str, int], dict[str, int]] | None:
@@ -612,60 +815,24 @@ async def count_open_journal_positions() -> tuple[dict[str, int], dict[str, int]
 
 
 async def realize_expired_journal_rows() -> int:
-    """Realize P&L for journal entries whose option expired without a closing fill.
+    """Realize journal lots whose option expired without (fully) closing.
 
-    An expired position produces no fill, so `persist_realized_pnl_to_journal`
-    never runs and the row stays open forever — the one gap in the fill-driven
-    P&L path. Expiry is taken from the linked candidate's `expiration_date`;
-    rows are realized at a total loss of the entry premium one day after
-    expiry (grace for settlement/backfilled closing fills to land first).
+    An expired contract produces no closing fill, so the fill-driven path never
+    releases the lot. Expiry is the linked candidate's ``expiration_date``; the
+    UNSOLD remainder of the lot is booked at a total loss of its entry premium
+    one day after expiry (grace for settlement / late fills to land first),
+    on top of whatever the sold legs already realized. Runs after
+    ``reconcile_journal_exits_from_fills`` so a lot that was in fact sold is
+    never swept. Rows are tagged ``expired_worthless`` (the exact string the
+    P&L reconciliation and bucket metrics key on) whenever any quantity expired.
 
-    Assumes expired-worthless: the DTE exit rules close positions at T-1/T-2,
-    so anything that actually reaches expiry is the zero-bid dust that
-    couldn't be sold. (ITM auto-exercise would make -premium wrong, but an
-    ITM position is exited by profit/DTE rules long before expiry.)
+    Assumes expired-worthless: an ITM position is exited by the time-stop long
+    before expiry; anything that reaches expiry unsold is zero-bid dust.
 
-    Returns the number of rows realized.
+    Returns the number of lots realized.
     """
-    from orion.storage.models_trade_journal import TradeJournalEntry
-
-    cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
-
-    async def write(session: Any) -> int:
-        stmt = (
-            select(TradeJournalEntry, CandidateTrade.expiration_date)
-            .join(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
-            .where(
-                TradeJournalEntry.broker_order_id.is_not(None),
-                TradeJournalEntry.filled_at_utc.is_not(None),
-                TradeJournalEntry.realized_pnl.is_(None),
-                CandidateTrade.expiration_date.is_not(None),
-                CandidateTrade.expiration_date < cutoff - timedelta(days=1),
-            )
-        )
-        rows = (await session.execute(stmt)).all()
-        realized = 0
-        for entry, expiration_date in rows:
-            if not entry.filled_qty or not entry.filled_avg_price:
-                continue  # no entry fill data — can't compute the loss
-            entry.realized_pnl = -abs(float(entry.filled_qty) * float(entry.filled_avg_price) * 100.0)
-            entry.exit_filled_at_utc = expiration_date
-            entry.notes = "expired_worthless"
-            realized += 1
-            logger.info(
-                "Realized expired-worthless journal entry",
-                extra={
-                    "event_type": "JOURNAL_EXPIRED_WORTHLESS",
-                    "ticker": entry.ticker,
-                    "decision_id": entry.decision_id,
-                    "realized_pnl": entry.realized_pnl,
-                    "expired": str(expiration_date),
-                },
-            )
-        return realized
-
     try:
-        count = await db_write(write)
+        count = await db_write(sweep_expired_in_session)
         if count:
             logger.info(
                 f"Expiry sweep realized {count} expired-worthless journal entries",
@@ -682,6 +849,57 @@ async def realize_expired_journal_rows() -> int:
             extra={"event_type": "JOURNAL_EXPIRY_SWEEP_ERROR", "error": str(e)},
         )
         raise
+
+
+async def sweep_expired_in_session(session: Any) -> int:
+    """The expiry sweep body; see `realize_expired_journal_rows`."""
+    from orion.storage.models_trade_journal import TradeJournalEntry
+
+    cutoff = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    stmt = (
+        select(TradeJournalEntry, CandidateTrade.expiration_date)
+        .join(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
+        .where(
+            TradeJournalEntry.broker_order_id.is_not(None),
+            TradeJournalEntry.filled_at_utc.is_not(None),
+            TradeJournalEntry.realized_pnl.is_(None),
+            CandidateTrade.expiration_date.is_not(None),
+            CandidateTrade.expiration_date < cutoff - timedelta(days=1),
+        )
+        .with_for_update(of=TradeJournalEntry)
+    )
+    rows = (await session.execute(stmt)).all()
+    realized = 0
+    for entry, expiration_date in rows:
+        if not entry.filled_qty or not entry.filled_avg_price:
+            continue  # no entry fill data — can't compute the loss
+        remaining = float(entry.filled_qty) - float(entry.exit_filled_qty or 0.0)
+        if remaining <= 1e-9:
+            continue
+        # A candidate with an expiration is an option contract: 100 shares per 1.00.
+        _apply_exit_leg(
+            entry,
+            multiplier=100.0,
+            order_id="expired",
+            qty=remaining,
+            price=0.0,
+            at=expiration_date,
+            source="expired",
+        )
+        entry.notes = "expired_worthless"
+        realized += 1
+        logger.info(
+            "Realized expired-worthless journal entry",
+            extra={
+                "event_type": "JOURNAL_EXPIRED_WORTHLESS",
+                "ticker": entry.ticker,
+                "decision_id": entry.decision_id,
+                "realized_pnl": entry.realized_pnl,
+                "expired_qty": remaining,
+                "expired": str(expiration_date),
+            },
+        )
+    return realized
 
 
 async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: str, order: Any) -> None:

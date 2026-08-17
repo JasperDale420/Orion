@@ -38,7 +38,7 @@ class TradeJournalEntry(Base):
     filled_avg_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     filled_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # Exit-leg fill data — written on close via persist_realized_pnl_to_journal.
+    # Exit-leg fill data — written on close via allocate_exit_to_journal (per-lot, cumulative).
     exit_filled_qty: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_filled_avg_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     exit_filled_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
