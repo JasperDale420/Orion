@@ -38,9 +38,6 @@ DISCOVERY_STATUS_DEGRADED = "DEGRADED"
 
 _heber_reader = HeberReader()
 _recent_regime_snapshots: list[dict[str, Any]] = []
-_latest_greek_exposure: list[dict] = []
-_latest_max_pain: list[dict] = []
-_latest_iv_rank: list[dict] = []
 
 
 # ---------------------------------------------------------------------------
@@ -420,90 +417,6 @@ async def get_spy_cumulative_return() -> float:
         if heber_return is not None:
             return heber_return
     return 0.0
-
-
-# ---------------------------------------------------------------------------
-# Greek exposure (Heber reads)
-# ---------------------------------------------------------------------------
-
-
-def get_latest_greek_exposure(tickers: list[str]) -> list[dict]:
-    """Get latest greek exposure data from Heber for the given tickers."""
-    global _latest_greek_exposure
-    try:
-        now_utc = datetime.now(UTC)
-        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        df = _heber_reader.read_greek_exposure(
-            symbols=tickers,
-            asof_time=now_utc,
-            start_time=today_start_utc,
-        )
-        if df.empty:
-            _latest_greek_exposure = []
-            return []
-        records = df.to_dict("records")
-        _latest_greek_exposure = records
-        logger.info("heber_greek_exposure_read", rows=len(records))
-        return records
-    except Exception:
-        logger.warning("Heber greek exposure read failed", exc_info=True)
-        return []
-
-
-# ---------------------------------------------------------------------------
-# Max pain (Heber reads)
-# ---------------------------------------------------------------------------
-
-
-def get_latest_max_pain(tickers: list[str]) -> list[dict]:
-    """Get latest max pain data from Heber for the given tickers."""
-    global _latest_max_pain
-    try:
-        now_utc = datetime.now(UTC)
-        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        df = _heber_reader.read_max_pain(
-            symbols=tickers,
-            asof_time=now_utc,
-            start_time=today_start_utc,
-        )
-        if df.empty:
-            _latest_max_pain = []
-            return []
-        records = df.to_dict("records")
-        _latest_max_pain = records
-        logger.info("heber_max_pain_read", rows=len(records))
-        return records
-    except Exception:
-        logger.warning("Heber max pain read failed", exc_info=True)
-        return []
-
-
-# ---------------------------------------------------------------------------
-# IV rank (Heber reads)
-# ---------------------------------------------------------------------------
-
-
-def get_latest_iv_rank(tickers: list[str]) -> list[dict]:
-    """Get latest IV rank data from Heber for the given tickers."""
-    global _latest_iv_rank
-    try:
-        now_utc = datetime.now(UTC)
-        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        df = _heber_reader.read_iv_rank(
-            symbols=tickers,
-            asof_time=now_utc,
-            start_time=today_start_utc,
-        )
-        if df.empty:
-            _latest_iv_rank = []
-            return []
-        records = df.to_dict("records")
-        _latest_iv_rank = records
-        logger.info("heber_iv_rank_read", rows=len(records))
-        return records
-    except Exception:
-        logger.warning("Heber IV rank read failed", exc_info=True)
-        return []
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,10 @@ Each stage is tested in isolation to verify it correctly returns CONTINUE or SKI
 and populates PipelineContext fields for downstream stages.
 """
 
-from datetime import UTC, datetime
+import asyncio
+import itertools
+import logging
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +18,28 @@ from orion.processing.pipeline import PipelineContext, StageResult
 from orion.processing.stages.ml_prefilter import MLPreFilter
 from orion.processing.stages.regime_gate import RegimeGate
 from orion.processing.stages.solver_ensemble import SolverEnsemble
+from orion.storage.db import async_session_factory
+from orion.storage.models import RegimeSnapshot
 from orion.storage.models_gold import CandidateTrade
+
+_regime_snapshot_id_seq = itertools.count(1)
+
+
+async def _insert_regime_snapshot(*, ts_utc: datetime, vix_level: float | None, ticker: str = "SPY") -> None:
+    # SQLite's rowid-alias autoincrement only kicks in for an `Integer` primary
+    # key column; the model declares `BigInteger`, so the in-memory test DB
+    # needs an explicit id (Postgres autoincrements this fine in prod).
+    async with async_session_factory() as session:
+        session.add(
+            RegimeSnapshot(
+                id=next(_regime_snapshot_id_seq),
+                ts_utc=ts_utc,
+                ticker=ticker,
+                vix_level=vix_level,
+                realized_vol=None,
+            )
+        )
+        await session.commit()
 
 
 def _make_candidate(**overrides) -> CandidateTrade:
@@ -103,6 +127,202 @@ async def test_regime_gate_populates_context():
     assert ctx.regime_snapshot.vol == VolRegime.LOW
     # Size multiplier should reflect favorable conditions
     assert ctx.regime_size_multiplier > 0
+
+
+# --- RegimeGate: honest regime inputs (audit fix — detect() was called with
+# no market data, so the documented SHOCK/extreme-VIX block could never fire) ---
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_uses_fresh_snapshot_to_detect_real_shock():
+    """A fresh regime_snapshots row (written by feature_enrichment) with a
+    genuine extreme vix_level must feed detect() and trigger the SHOCK block —
+    proving the gate is no longer blind to real market data when it exists."""
+    gate = RegimeGate()  # real detector, not mocked — exercise the actual wiring
+
+    await _insert_regime_snapshot(ts_utc=datetime.now(UTC), vix_level=40.0)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "SKIP"
+    assert "SHOCK" in result.reason
+    assert result.trace.get("regime_inputs") == "regime_snapshots"
+    assert ctx.regime_snapshot.vol == VolRegime.SHOCK
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_ignores_stale_snapshot():
+    """A regime_snapshots row older than the documented freshness window must
+    NOT be treated as real-time data — a stale extreme VIX reading (last
+    written 30 minutes ago) must not silently drive today's decisions."""
+    gate = RegimeGate()
+
+    stale_ts = datetime.now(UTC) - timedelta(minutes=30)
+    await _insert_regime_snapshot(ts_utc=stale_ts, vix_level=40.0)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_no_snapshot_reports_none_and_does_not_block():
+    """No regime_snapshots row at all (fresh DB / no feature_enrichment writes
+    yet) must fail toward not blocking, and the trace must say so honestly
+    rather than implying real inputs were used."""
+    gate = RegimeGate()
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_fresh_snapshot_with_null_vix_reports_none():
+    """A fresh row that carries no vix_level (today's reality: feature_enrichment's
+    upstream VIX read is disabled in prod) must not be reported as a real
+    input just because the row itself is recent."""
+    gate = RegimeGate()
+
+    await _insert_regime_snapshot(ts_utc=datetime.now(UTC), vix_level=None)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_db_read_failure_falls_back_to_no_block(monkeypatch):
+    """A DB error while reading regime_snapshots must never crash the pipeline
+    or block trading — it must degrade to the same behavior as no source."""
+    gate = RegimeGate()
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("orion.processing.stages.regime_gate.async_session_factory", _raise)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_logs_inert_warning_exactly_once(caplog):
+    """When no real input is available, the gate must warn once (not spam
+    the logs once per candidate) so an operator can discover it — but the
+    per-decision trace still reports `regime_inputs: none` every time."""
+    gate = RegimeGate()
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            ctx = PipelineContext(candidate=_make_candidate())
+            await gate.evaluate(ctx)
+
+    # regime_gate's logger is structlog-based (setup_struct_logger), which
+    # JSON-renders the event into LogRecord.msg before stdlib logging ever
+    # sees it — so the event name is a substring of the rendered record,
+    # not an exact match (unlike a plain logging.getLogger() call).
+    inert_warnings = [r for r in caplog.records if "regime_gate_inert_no_inputs" in r.getMessage()]
+    assert len(inert_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_rejects_future_dated_snapshot():
+    """Codex adversarial review (high): a future-dated row (clock skew, bad
+    data) has a NEGATIVE age, which must not satisfy `age <= freshness` and
+    be treated as fresh forever until real time catches up to it — that
+    would let one bad row latch a SHOCK block indefinitely."""
+    gate = RegimeGate()
+
+    future_ts = datetime.now(UTC) + timedelta(minutes=10)
+    await _insert_regime_snapshot(ts_utc=future_ts, vix_level=40.0)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_db_read_timeout_falls_back_to_no_block(monkeypatch):
+    """Codex adversarial review (high): main_execution awaits
+    SignalEngine.decide() sequentially per candidate, so a hung DB read
+    inside the gate would stall the whole pipeline rather than degrading —
+    the read must be wrapped in a hard timeout, same idiom as
+    shared/liveness.py's publish call."""
+    gate = RegimeGate()
+    monkeypatch.setattr("orion.processing.stages.regime_gate.REGIME_INPUT_DB_TIMEOUT_SECONDS", 0.05)
+
+    async def _hang():
+        await asyncio.sleep(5)
+        return None
+
+    monkeypatch.setattr(gate, "_read_latest_snapshot", _hang)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await asyncio.wait_for(gate.evaluate(ctx), timeout=2.0)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_cache_never_outlives_row_freshness_deadline():
+    """Codex adversarial review (medium): the 60s read-cache must not keep
+    returning a row's real vix past that row's own 15-minute freshness
+    deadline — a row read at 14:59 old must not still be "fresh" 61 seconds
+    later. The cache expiry is capped at the row's own deadline, not just
+    now + 60s."""
+    gate = RegimeGate()
+
+    almost_stale_ts = datetime.now(UTC) - timedelta(minutes=15) + timedelta(seconds=5)
+    await _insert_regime_snapshot(ts_utc=almost_stale_ts, vix_level=40.0)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.trace.get("regime_inputs") == "regime_snapshots"
+    assert result.action == "SKIP"
+
+    # The cache must expire at (row_ts + 15min), not (now + 60s) — the row
+    # deadline arrives in ~5s, well before the 60s TTL would.
+    row_deadline = almost_stale_ts + timedelta(minutes=15)
+    assert gate._cache_expires_at is not None
+    assert gate._cache_expires_at <= row_deadline + timedelta(seconds=1)
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_caches_db_read_within_ttl():
+    """The bounded read must be cached (<=60s) so a hot pipeline evaluating
+    many candidates per minute doesn't hammer TimescaleDB once per candidate
+    for a value that only changes every 5 minutes."""
+    gate = RegimeGate()
+    await _insert_regime_snapshot(ts_utc=datetime.now(UTC), vix_level=40.0)
+
+    calls = 0
+    real_factory = async_session_factory
+
+    def _counting_factory():
+        nonlocal calls
+        calls += 1
+        return real_factory()
+
+    with patch("orion.processing.stages.regime_gate.async_session_factory", side_effect=_counting_factory):
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+
+    assert calls == 1
 
 
 # --- MLPreFilter ---
