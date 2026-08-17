@@ -415,3 +415,42 @@ def test_migration_chains_off_b5():
 
     assert module.revision == "b6_risk_daily_loss_date"
     assert module.down_revision == "b5_risk_accounting_version"
+
+
+# A closing fill whose broker timestamp is missing or lies in the future cannot
+# be placed in any session. Fail closed: it may ADD to today's loss but must
+# never REDUCE it — otherwise an untimestamped winning close could re-admit
+# entries after the daily limit was hit.
+@pytest.mark.asyncio
+async def test_untimestamped_gain_never_credits_today(frozen_clock, caplog):
+    rm = await _manager_with_open_long()
+    caplog.set_level(logging.WARNING, logger="orion.execution.risk.manager")
+
+    outcome = await rm.process_fill("AAPL", 10, 150.0, "sell", fill_id="no_ts_gain", filled_at=None)
+
+    assert outcome.realized_pnl == pytest.approx(500.0)
+    assert rm.current_daily_loss == pytest.approx(900.0), "an untimestamped gain must not buy headroom"
+    assert rm.current_equity == pytest.approx(100500.0)
+    assert any('"RISK_FILL_TIMESTAMP_UNTRUSTED"' in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_untimestamped_loss_still_debits_today(frozen_clock):
+    rm = await _manager_with_open_long()
+
+    outcome = await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="no_ts_loss", filled_at=None)
+
+    assert outcome.realized_pnl == pytest.approx(-200.0)
+    assert rm.current_daily_loss == pytest.approx(1100.0)
+
+
+@pytest.mark.asyncio
+async def test_future_dated_gain_never_credits_today(frozen_clock):
+    rm = await _manager_with_open_long()
+
+    outcome = await rm.process_fill(
+        "AAPL", 10, 150.0, "sell", fill_id="future_gain", filled_at=FROZEN_NOW + timedelta(days=2)
+    )
+
+    assert outcome.realized_pnl == pytest.approx(500.0)
+    assert rm.current_daily_loss == pytest.approx(900.0)

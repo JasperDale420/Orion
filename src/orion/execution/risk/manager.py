@@ -988,6 +988,26 @@ class RiskManager:
                         "daily_loss": self.current_daily_loss,
                     },
                 )
+            elif (
+                fill_trading_date is None
+                or (self._daily_loss_date is not None and fill_trading_date > self._daily_loss_date)
+            ) and realized_pnl > 0:
+                # No usable broker execution date (missing, unparseable, or in
+                # the future): the fill cannot be placed in any session. Fail
+                # closed for the limit — a loss still debits today, but a gain
+                # must never buy headroom under a limit that may already be hit.
+                logger.warning(
+                    f"Untrusted fill timestamp for {ticker} ({filled_at!r}): gain of ${realized_pnl:.2f} "
+                    f"is NOT credited to today's daily loss (still ${self.current_daily_loss:.2f}).",
+                    extra={
+                        "event_type": "RISK_FILL_TIMESTAMP_UNTRUSTED",
+                        "ticker": ticker,
+                        "fill_id": fill_id,
+                        "realized_pnl": realized_pnl,
+                        "filled_at": str(filled_at),
+                        "daily_loss": self.current_daily_loss,
+                    },
+                )
             else:
                 self.current_daily_loss -= realized_pnl
 
