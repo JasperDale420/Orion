@@ -697,13 +697,17 @@ async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: 
             elif order is not None:
                 broker_order_id = str(getattr(order, "id", "")) if order else None
 
+            # candidate_id is deliberately NOT written here. This row means "a
+            # close was SUBMITTED", not "the position is closed" — the order
+            # can still be rejected, cancelled, or partially filled. But
+            # PositionManager.initialize() outer-joins ExitDecision on
+            # candidate_id and treats any linked row as terminal, so linking at
+            # submission would drop a still-open position from the rule-based
+            # recovery path after a restart.
             session.add(
                 ExitDecision(
                     exit_id=client_order_id,
                     ticker=ticker,
-                    # Present on monitor-originated signals; other close
-                    # callers' signals leave it unset.
-                    candidate_id=getattr(exit_signal, "candidate_id", None),
                     rule_id=exit_signal.rule_id,
                     exit_reason=exit_signal.reason,
                     urgency=exit_signal.urgency,

@@ -360,7 +360,6 @@ class TrackedPosition:
 
     # Additional
     decision_id: str | None = None
-    candidate_id: str | None = None  # Entry candidate; links exit_decisions back to the entry
     option_symbol: str | None = None  # For options positions
 
     # Optional — populated by sync_positions when the parent decision/order
@@ -436,7 +435,6 @@ class PositionMonitor:
         pos.gex_at_entry = entry_context.get("gex_at_entry")
         pos.market_tide_30m = entry_context.get("market_tide_30m")
         pos.decision_id = entry_context.get("decision_id")
-        pos.candidate_id = entry_context.get("candidate_id")
         pos.option_symbol = entry_context.get("option_symbol")
         pos.expiry_date = entry_context.get("expiry_date") or _expiry_from_occ_symbol(pos.symbol)
 
@@ -638,9 +636,8 @@ class PositionMonitor:
         prefix to ignore positions opened by other systems on the shared
         Alpaca account). From that decision row we pull:
 
-          - decision_id, candidate_id, entry_time, direction, premium_usd, dte,
-            bucket, option_symbol, expiry_date — all directly queryable from
-            the join.
+          - decision_id, entry_time, direction, premium_usd, dte, bucket,
+            option_symbol, expiry_date — all directly queryable from the join.
           - is_sweep, event_id — extracted from ``candidate_trades.evidence``.
           - iv_rank_at_entry, vix_at_entry, gex_at_entry, market_tide_30m —
             fetched from the same flow_enricher pipeline the ML scorer uses,
@@ -668,7 +665,6 @@ class PositionMonitor:
         query = f"""
             SELECT
                 sd.decision_id,
-                sd.candidate_id,
                 sd.timestamp_utc as decision_ts,
                 ct.ticker,
                 ct.option_symbol,
@@ -851,7 +847,6 @@ class PositionMonitor:
 
         context = {
             "decision_id": row.get("decision_id"),
-            "candidate_id": row.get("candidate_id"),
             "option_symbol": row.get("option_symbol"),
             "premium_usd": premium_usd,
             "dte": dte,
@@ -886,6 +881,9 @@ class PositionMonitor:
         entire exit policy: the classifier's built-in heuristic uses
         tighter, undocumented thresholds (SWING stop -20% vs the -40%
         barrier) and would otherwise pre-empt every documented barrier.
+        A barrier evaluation that raises is retried with the unoverridden
+        bucket defaults; if that also raises, the classifier is consulted
+        as the last resort for that position (never "no policy").
         """
         from orion.config import system_settings
         from orion.core.market_schedule import resolve_session_close
@@ -903,10 +901,14 @@ class PositionMonitor:
 
         for symbol, pos in self.tracked_positions.items():
             # Fallback rules first — they're cheap and deterministic.
-            # Wrap in try/except so a future rule that raises (I/O,
-            # schema drift on expiry_date, etc.) doesn't kill the whole
-            # evaluate loop and starve the ML path for every remaining
-            # position this cycle. On failure: fall through to ML.
+            # Wrap in try/except so a rule that raises (a malformed
+            # ORION_EXIT_BUCKET_OVERRIDES entry, schema drift on
+            # expiry_date, etc.) doesn't kill the whole evaluate loop and
+            # starve every remaining position this cycle. On failure the
+            # evaluation is retried with the unoverridden bucket defaults so
+            # the position is never left with no policy; only if that also
+            # raises does the classifier become the last resort below.
+            policy_evaluated = True
             try:
                 fallback = evaluate_fallback_rules(
                     pos,
@@ -915,7 +917,7 @@ class PositionMonitor:
                 )
             except Exception as exc:
                 logger.error(
-                    f"Exit fallback evaluation raised for {symbol}: {exc}",
+                    f"Exit fallback evaluation raised for {symbol}: {exc}; retrying with default barriers",
                     extra={
                         "event": "exit_fallback_error",
                         "symbol": symbol,
@@ -923,7 +925,27 @@ class PositionMonitor:
                     },
                     exc_info=True,
                 )
-                fallback = None  # fall through to ML branch
+                try:
+                    fallback = evaluate_fallback_rules(
+                        pos,
+                        params=resolve_exit_params(pos.bucket),
+                        session_close=session_close,
+                    )
+                except Exception as retry_exc:
+                    logger.critical(
+                        f"EXIT_POLICY_EVALUATION_FAILED for {symbol} ({pos.bucket}): default barriers also "
+                        f"raised: {retry_exc}; consulting the exit classifier as last resort",
+                        extra={
+                            "event": "exit_policy_evaluation_failed",
+                            "event_type": "EXIT_POLICY_EVALUATION_FAILED",
+                            "ticker": symbol,
+                            "bucket": pos.bucket,
+                            "error": str(retry_exc),
+                        },
+                        exc_info=True,
+                    )
+                    fallback = None
+                    policy_evaluated = False
 
             if fallback is not None:
                 logger.info(
@@ -940,8 +962,8 @@ class PositionMonitor:
                 # Wrap the ExitSignal as ExitPrediction-compatible so the
                 # downstream execute_exits path doesn't need to branch.
                 # Duck-typed as ExitPrediction: consumers only read .should_exit,
-                # .confidence, .reasoning, and (optionally) .rule_id / .urgency,
-                # which carry the rule's own identity through to exit_decisions.
+                # .confidence, .reasoning, and (optionally) .rule_id, which
+                # carries the rule's own identity through to exit_decisions.
                 prediction = cast(
                     "ExitPrediction",
                     SimpleNamespace(
@@ -949,7 +971,6 @@ class PositionMonitor:
                         confidence=fallback.confidence,
                         reasoning=fallback.reason,
                         rule_id=fallback.rule_id,
-                        urgency=fallback.urgency,
                     ),
                 )
                 exit_signals.append((pos, prediction))
@@ -957,8 +978,10 @@ class PositionMonitor:
 
             # No trained exit model for this bucket: the barriers above are
             # the whole policy, so the classifier (and its heuristic) is
-            # not consulted.
-            if pos.bucket not in self.exit_classifier.models:
+            # not consulted — but only when the barriers actually evaluated.
+            # If they raised on both attempts, the classifier is the last
+            # resort rather than leaving the position with no exit policy.
+            if policy_evaluated and pos.bucket not in self.exit_classifier.models:
                 continue
 
             # ML classifier path — unchanged from before.
@@ -1157,16 +1180,17 @@ class PositionMonitor:
                         # risk manager, and order persistence
                         from types import SimpleNamespace
 
-                        # A fallback rule's prediction carries its own rule_id
-                        # and urgency, which are what exit_decisions records;
-                        # a classifier prediction carries neither and keeps
-                        # the ml_exit label with an immediate close.
+                        # A fallback rule's prediction carries its own rule_id,
+                        # which is what exit_decisions records; a classifier
+                        # prediction has none and keeps the ml_exit label.
+                        # Urgency is always IMMEDIATE regardless of the rule:
+                        # close_position keys equity market-vs-limit routing
+                        # on it, and a monitor exit is meant to close now.
                         exit_signal = SimpleNamespace(
                             rule_id=getattr(prediction, "rule_id", None) or f"ml_exit_{pos.bucket}",
                             reason=prediction.reasoning,
-                            urgency=getattr(prediction, "urgency", None) or "IMMEDIATE",
+                            urgency="IMMEDIATE",
                             confidence=prediction.confidence,
-                            candidate_id=pos.candidate_id,
                             details={"bucket": pos.bucket, "pnl_pct": pos.unrealized_pnl_pct},
                         )
 
