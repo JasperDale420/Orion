@@ -1,4 +1,9 @@
+from datetime import UTC, datetime, timedelta
+
+import pandas as pd
+
 from orion.processing.normalizer import NormalizationEngine
+from orion.shared.utils import make_json_safe
 
 
 def test_normalize_uw_flow():
@@ -88,18 +93,79 @@ def test_normalize_alpaca_bar():
     assert normalized["volume"] == 1000
 
 
+def test_normalize_uw_flow_reads_heber_silver_ts_event_as_print_time():
+    """Heber Silver ``feed=flow_alerts`` rows carry the print time in
+    ``ts_event`` (the only event-time column in the parquet schema — there is
+    no ``flow_ts_utc`` / ``timestamp`` / ``created_at``). ``_heber_row_to_event``
+    passes the row through ``make_json_safe`` so ``ts_event`` reaches the
+    normalizer as an ISO string. The normalized ``flow_ts_utc`` MUST be that
+    print time; falling through to ``parse_timestamptz(None)`` stamps the
+    normalization wall-clock instead, so the rule-time signal-age gate sees
+    ~0s for a print that is really minutes old (the 2026-08 born-stale
+    "Preflight reject: Data Lag" pattern on the heber_flow connector).
+    """
+    print_ts = datetime.now(UTC) - timedelta(seconds=300)
+    row = {
+        "event_id": "ce8ad61267446842b5ddfe3f76848f0e",
+        "provider": "unusual_whales",
+        "feed": "flow_alerts",
+        "instrument_type": "option",
+        "instrument_key": "option:OCC:SPY260814C00640000",
+        "symbol": "SPY",
+        "ts_event": pd.Timestamp(print_ts),
+        "ts_ingest": pd.Timestamp(print_ts + timedelta(seconds=2)),
+        "ts_available": pd.Timestamp(print_ts + timedelta(seconds=26)),
+        "underlying": "SPY",
+        "occ_symbol": "SPY260814C00640000",
+        "expiry": "2026-08-14",
+        "strike": 640.0,
+        "put_call": "C",
+        "premium": 131572.0,
+        "volume": 134441.0,
+        "open_interest": 685.0,
+        "aggressor": "ask",
+        "is_sweep": True,
+        "total_ask_side_prem": 131572.0,
+        "total_bid_side_prem": 0.0,
+    }
+    payload = {k: make_json_safe(v) for k, v in row.items()}
+    assert isinstance(payload["ts_event"], str)
+
+    normalized = NormalizationEngine.normalize_event("UW", "UW_FLOW", payload)
+
+    flow_ts = datetime.fromisoformat(normalized["flow_ts_utc"])
+    assert abs((flow_ts - print_ts).total_seconds()) < 1.0
+    age = (datetime.now(UTC) - flow_ts).total_seconds()
+    assert 299.0 <= age <= 305.0
+
+
+def test_normalize_uw_flow_prefers_gateway_timestamp_over_ts_event():
+    """The Gateway push path stamps ``event_ts_utc`` from ``payload.timestamp``
+    first; the normalizer must agree so the two delivery paths stay
+    interchangeable."""
+    payload = {
+        "ticker": "SPY",
+        "timestamp": "2026-08-14T14:30:00+00:00",
+        "ts_event": "2026-08-14T14:25:00+00:00",
+        "put_call": "C",
+        "expiry": "2026-08-14",
+        "strike": 640.0,
+        "price": 1.0,
+        "size": 10,
+    }
+    normalized = NormalizationEngine.normalize_event("UW", "UW_FLOW", payload)
+    assert normalized["flow_ts_utc"].startswith("2026-08-14T14:30:00")
+
+
 def test_normalize_uw_flow_accepts_flow_ts_utc():
-    """Bronze events produced by `_heber_row_to_event` carry the Heber Silver
-    schema, which uses `flow_ts_utc` for the event timestamp — NOT `timestamp`
-    or `created_at`. Without this support, the normalizer's strict
-    parse_timestamptz call raises on None, the event is silently dropped,
-    and zero UW_FLOW silver signals get persisted even though bronze is
-    populating. This regression was caught in prod when Orion went 0-of-N
-    EXECUTEs for hours despite UW data flowing.
+    """Regression guard for the legacy ``flow_ts_utc`` payload key (Orion's own
+    Silver column name; also what a re-normalized payload carries). Without a
+    matching branch the strict parse_timestamptz call falls through to now()
+    and the event's timestamp is silently replaced by the ingest time.
     """
     payload = {
         "ticker": "EWY",
-        "flow_ts_utc": "2026-05-21T17:26:36+00:00",  # Heber-derived ts
+        "flow_ts_utc": "2026-05-21T17:26:36+00:00",
         "put_call": "P",
         "expiry": "2026-05-22",
         "strike": 175.0,
