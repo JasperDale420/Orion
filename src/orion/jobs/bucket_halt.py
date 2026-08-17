@@ -203,8 +203,25 @@ def reset_halt_cache() -> None:
     _cached_at = 0.0
 
 
-async def get_active_halt(bucket: str, *, now: datetime | None = None) -> BucketHalt | None:
-    """The live halt for ``bucket``, or None — the entry gate's read.
+async def _halt_rows(*, use_cache: bool) -> dict[str, BucketHalt] | None:
+    """Rows for a gate read, or None when they could not be read at all."""
+    global _cached_rows, _cached_at
+
+    if use_cache and _cached_rows is not None and (_monotonic() - _cached_at) <= CACHE_TTL_SECONDS:
+        return _cached_rows
+    try:
+        rows = await _load_halts()
+    except Exception as exc:
+        # A failed read is never cached: it must not pin "no halts" for a TTL.
+        logger.warning("bucket_halt_read_failed_entry_allowed", error=str(exc))
+        return None
+    _cached_rows = rows
+    _cached_at = _monotonic()
+    return rows
+
+
+async def get_active_halt(bucket: str, *, now: datetime | None = None, use_cache: bool = True) -> BucketHalt | None:
+    """The live halt for ``bucket``, or None — the entry gates' read.
 
     Fails toward the pre-existing behaviour: a DB error logs a WARNING and
     returns None (do not halt). A halt is an active measurement verdict, not a
@@ -212,21 +229,14 @@ async def get_active_halt(bucket: str, *, now: datetime | None = None) -> Bucket
     circuit breaker and risk limits are the gates that fail closed.
 
     Rows are cached for ``CACHE_TTL_SECONDS``; expiry is evaluated against
-    ``now`` on every call, so a warm cache still releases a halt on time.
+    ``now`` on every call, so a warm cache still releases a halt on time. Pass
+    ``use_cache=False`` at the submission authority, where the point of the
+    read is to catch a halt opened since the candidate cleared preflight.
     """
-    global _cached_rows, _cached_at
-
-    if _cached_rows is None or (_monotonic() - _cached_at) > CACHE_TTL_SECONDS:
-        try:
-            rows = await _load_halts()
-        except Exception as exc:
-            # Not cached: a failed read must not pin "no halts" for a full TTL.
-            logger.warning("bucket_halt_read_failed_entry_allowed", bucket=bucket, error=str(exc))
-            return None
-        _cached_rows = rows
-        _cached_at = _monotonic()
-
-    halt = _cached_rows.get(normalize_bucket(bucket))
+    rows = await _halt_rows(use_cache=use_cache)
+    if rows is None:
+        return None
+    halt = rows.get(normalize_bucket(bucket))
     return halt if halt is not None and halt.gates_entries(now) else None
 
 

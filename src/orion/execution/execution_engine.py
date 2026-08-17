@@ -1459,6 +1459,39 @@ class ExecutionEngine:
             decision.reason = "Circuit Breaker Open"
             return
 
+        # Same fence for the per-bucket entry halt, and for the same reason:
+        # the nightly measurement loop or an operator can open one after this
+        # candidate cleared preflight, while the option chain was being fetched.
+        # Read it uncached — the 60-second cache that keeps the gate off
+        # preflight's hot path would otherwise let an operator's immediate stop
+        # through exactly this window. Fail-open on a read error is preserved:
+        # a halt is a measured verdict, not a kill switch, and the breaker above
+        # is the gate that fails closed.
+        from orion.jobs.bucket_halt import get_active_halt
+
+        halt_dte = (
+            (candidate.expiration_date.date() - datetime.now(UTC).date()).days
+            if getattr(candidate, "expiration_date", None) is not None
+            else None
+        )
+        halt = await get_active_halt(bucket_for_dte(halt_dte), use_cache=False)
+        if halt is not None:
+            logger.warning(
+                "EXECUTION BLOCKED: Bucket halted before submission",
+                extra={
+                    "event_type": "EXECUTION_BLOCKED",
+                    "reason": "Bucket Halted",
+                    "bucket": halt.bucket,
+                    "expires_after_session": halt.expires_after_session.isoformat(),
+                    "set_by": halt.set_by,
+                    "ticker": candidate.ticker,
+                    "option_symbol": candidate.option_symbol,
+                },
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = f"Bucket halted by measurement loop: {halt.describe()}"
+            return
+
         logger.info(
             "options_execution_triggered",
             num_contracts=num_contracts,
