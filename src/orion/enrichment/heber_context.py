@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 
 from orion.clients.heber_reader import HeberReader
 from orion.config import system_settings
+from orion.core.market_schedule import MarketSchedule
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import async_session_factory
@@ -133,6 +134,23 @@ async def _get_active_tickers_from_bronze(limit: int, lookback_hours: int = 24) 
         return [row[0] for row in result.all() if row[0]]
 
 
+def _market_is_closed() -> bool:
+    """True only when the exchange calendar positively reports the market closed.
+
+    A calendar failure cannot be trusted to mean "closed", so it is treated
+    as open — an unreadable calendar must not silence the discovery
+    degradation fence.
+    """
+    try:
+        return not MarketSchedule().is_market_open()
+    except Exception:
+        logger.warning(
+            "Market schedule unavailable during ticker discovery; treating market as open",
+            exc_info=True,
+        )
+        return False
+
+
 async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], str]:
     """Get tickers with recent flow activity and the source used.
 
@@ -141,6 +159,11 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], st
     2. Heber flow_alerts (parquet scan — fallback only; historically OOM-prone)
     3. Heber bars (equity bars)
     4. Static fallback list
+
+    An empty (not failed) bronze result while the market is closed reports
+    the static list under source ``market_closed_idle``: the 24h lookback
+    ages out every weekend, which is expected quiet rather than a discovery
+    outage and must not accumulate into a DEGRADED trade block at the open.
     """
     # Primary: DB-backed, indexed, bounded. This is the ONLY hot-path source —
     # all Heber parquet scanning was removed from the discovery hot path after
@@ -180,6 +203,8 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], st
                 },
             )
             return bars_tickers, "heber"
+    elif _market_is_closed():
+        return STATIC_TICKER_FALLBACK[:limit], "market_closed_idle"
 
     return STATIC_TICKER_FALLBACK[:limit], "static_fallback"
 
@@ -579,12 +604,13 @@ async def seed_regime_snapshots_from_db(limit: int = 500) -> None:
 def _is_discovery_degraded(source: str, streak: int, warn_streak: int) -> bool:
     """Pure logic: is discovery in a degraded state?
 
-    Healthy sources (`bronze_db`, `heber`) are never degraded. Static
-    fallback is degraded only after the streak crosses the warn threshold —
-    matching the existing warn-log semantics so we don't block trading on
-    transient single-cycle blips.
+    Healthy sources (`bronze_db`, `heber`) are never degraded, nor is
+    `market_closed_idle` (empty bronze outside market hours is expected
+    quiet, not an outage). Static fallback is degraded only after the streak
+    crosses the warn threshold — matching the existing warn-log semantics so
+    we don't block trading on transient single-cycle blips.
     """
-    if source in ("bronze_db", "heber"):
+    if source in ("bronze_db", "heber", "market_closed_idle"):
         return False
     return streak >= warn_streak
 

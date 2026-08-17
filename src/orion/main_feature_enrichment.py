@@ -198,10 +198,11 @@ def _note_ticker_source_streak(
 ) -> int:
     # Per docs/rca/feature_enrichment_crash_loop.md (2026-04-22), bronze_db
     # is the canonical primary ticker-discovery source; "heber" is now a
-    # fallback. Both are healthy outcomes — only "static_fallback" or an
-    # unknown source indicates real degradation, so reset the streak for
-    # the recognized data-backed sources.
-    if source in ("bronze_db", "heber"):
+    # fallback. Both are healthy outcomes, as is "market_closed_idle" (empty
+    # bronze outside market hours) — only "static_fallback" or an unknown
+    # source indicates real degradation, so reset the streak for the
+    # recognized non-degraded sources.
+    if source in ("bronze_db", "heber", "market_closed_idle"):
         return 0
 
     streak = non_heber_streak + 1
@@ -256,7 +257,7 @@ def _log_ticker_source_transition(source: str, previous_source: str | None, tick
         "source": source,
         "tickers_count": tickers_count,
     }
-    if source == "heber":
+    if source in ("heber", "market_closed_idle"):
         logger.info("Ticker discovery source switched", extra=extra)
     else:
         logger.warning("Ticker discovery source switched away from Heber", extra=extra)

@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from orion import main_feature_enrichment as feature_enrichment
+from orion.core.market_schedule import MarketSchedule
 from orion.enrichment import heber_context
 
 
@@ -53,6 +54,7 @@ async def test_get_active_tickers_with_source_falls_back_to_heber_when_bronze_fa
 
 @pytest.mark.asyncio
 async def test_get_active_tickers_with_source_falls_back_to_static_without_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(MarketSchedule, "is_market_open", lambda self, timestamp=None: True)
     monkeypatch.setattr(
         heber_context._heber_reader,
         "read_flow",
@@ -69,6 +71,7 @@ async def test_get_active_tickers_with_source_falls_back_to_static_without_db(mo
 
 @pytest.mark.asyncio
 async def test_get_active_tickers_with_source_falls_back_to_static(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(MarketSchedule, "is_market_open", lambda self, timestamp=None: True)
     monkeypatch.setattr(
         heber_context._heber_reader,
         "read_flow",
@@ -81,6 +84,90 @@ async def test_get_active_tickers_with_source_falls_back_to_static(monkeypatch: 
 
     assert source == "static_fallback"
     assert tickers[:2] == ["SPY", "QQQ"]
+
+
+async def _bronze_empty(_limit: int, lookback_hours: int = 24) -> list[str]:
+    return []
+
+
+@pytest.mark.asyncio
+async def test_empty_bronze_while_market_closed_is_idle_not_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful-but-empty bronze query outside market hours is normal
+    (weekend/overnight ageing past the 24h lookback), not a discovery outage.
+    It must not feed the DEGRADED fence that blocks Monday-open entries."""
+    monkeypatch.setattr(heber_context, "_get_active_tickers_from_bronze", _bronze_empty)
+    monkeypatch.setattr(MarketSchedule, "is_market_open", lambda self, timestamp=None: False)
+
+    tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+
+    assert source == "market_closed_idle"
+    assert tickers == ["SPY", "QQQ"]
+    assert heber_context._is_discovery_degraded("market_closed_idle", streak=300, warn_streak=3) is False
+
+
+@pytest.mark.asyncio
+async def test_empty_bronze_while_market_open_still_static_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    """During the session an empty bronze result is a real outage signal:
+    the source stays static_fallback and the streak fence is unchanged."""
+    monkeypatch.setattr(heber_context, "_get_active_tickers_from_bronze", _bronze_empty)
+    monkeypatch.setattr(MarketSchedule, "is_market_open", lambda self, timestamp=None: True)
+
+    tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+
+    assert source == "static_fallback"
+    assert tickers == ["SPY", "QQQ"]
+    assert heber_context._is_discovery_degraded("static_fallback", streak=3, warn_streak=3) is True
+
+
+@pytest.mark.asyncio
+async def test_empty_bronze_calendar_error_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dead exchange calendar cannot be trusted to say 'closed'; treat it as
+    open so the degradation fence keeps its existing behaviour."""
+
+    def _calendar_dead(self: MarketSchedule, timestamp: datetime | None = None) -> bool:
+        raise RuntimeError("Cannot verify market hours without calendar")
+
+    monkeypatch.setattr(heber_context, "_get_active_tickers_from_bronze", _bronze_empty)
+    monkeypatch.setattr(MarketSchedule, "is_market_open", _calendar_dead)
+
+    tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+
+    assert source == "static_fallback"
+    assert tickers == ["SPY", "QQQ"]
+
+
+@pytest.mark.asyncio
+async def test_weekend_idle_then_dead_feed_at_open_still_reaches_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Closed-to-open transition with bronze empty throughout.
+
+    Weekend cycles are idle and hold the streak at zero; once the market opens
+    the fence arms from a clean streak, so a feed that is genuinely dead at the
+    open is DEGRADED after warn_streak (3) discovery refreshes — the same
+    window an intraday outage has always had, no longer pre-armed by the
+    weekend, and no wider than before.
+    """
+    market_open = {"value": False}
+    monkeypatch.setattr(heber_context, "_get_active_tickers_from_bronze", _bronze_empty)
+    monkeypatch.setattr(MarketSchedule, "is_market_open", lambda self, timestamp=None: market_open["value"])
+    warn_streak = 3
+    streak = 0
+
+    for _ in range(3):
+        _tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+        streak = feature_enrichment._note_ticker_source_streak(source, streak, warn_streak, tickers_count=2)
+        assert source == "market_closed_idle"
+        assert streak == 0
+        assert heber_context._is_discovery_degraded(source, streak, warn_streak) is False
+
+    market_open["value"] = True
+    degraded_at: list[bool] = []
+    for _ in range(warn_streak):
+        _tickers, source = await feature_enrichment.get_active_tickers_with_source(limit=2)
+        streak = feature_enrichment._note_ticker_source_streak(source, streak, warn_streak, tickers_count=2)
+        assert source == "static_fallback"
+        degraded_at.append(heber_context._is_discovery_degraded(source, streak, warn_streak))
+
+    assert degraded_at == [False, False, True]
 
 
 def test_note_fetch_count_warns_on_zero_write_streak(monkeypatch: pytest.MonkeyPatch) -> None:
