@@ -39,28 +39,18 @@ URL from `scripts/run_ingestion_native.sh` (it pins `DB_URL`); a plain
 
 Only after confirming the condition that tripped it has cleared.
 
-### Via Python (preferred — this is the path that works)
+### Via operator command (preferred)
 
 ```bash
-DB_URL="<the DB_URL pinned in scripts/run_ingestion_native.sh>" uv run python -c "
-import asyncio, os
-from orion.storage import db
-async def main():
-    db.configure_db(os.environ['DB_URL'], echo=False)
-    from orion.core.circuit_breaker import CircuitBreaker
-    print(await CircuitBreaker().get_state())
-    await CircuitBreaker().close()
-    print(await CircuitBreaker().get_state())
-asyncio.run(main())"
+DB_URL="<the DB_URL pinned in scripts/run_ingestion_native.sh>" \
+  uv run python -m orion.jobs.reset_circuit_breaker --reason "<why>"
 ```
 
-Drop the `close()` line to read the state without changing it.
-
-### Not `scripts/reset_circuit_breaker.py`
-
-That script imports `psycopg2`, which is not a declared dependency and is not
-installed in the venv, so it fails at import with `ModuleNotFoundError`. Use the
-Python path above until the script is fixed or removed.
+Add `--dry-run` to show the current state without modifying it. This uses the
+project's own async ORM path (`orion.core.circuit_breaker.CircuitBreaker`), so
+it needs no extra dependencies. There used to be a `scripts/reset_circuit_breaker.py`
+that imported `psycopg2` (not a declared dependency) and failed at import with
+`ModuleNotFoundError`; it has been replaced by this module.
 
 ### Via admin API
 

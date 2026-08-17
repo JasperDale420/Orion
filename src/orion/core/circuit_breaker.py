@@ -47,7 +47,7 @@ class CircuitBreaker:
         await db_write(set_breaker)
         logger.critical(f"CIRCUIT BREAKER OPENED: {reason}")
 
-    async def close(self) -> None:
+    async def close(self, reason: str | None = None) -> None:
         """
         Resets the circuit breaker (Resumes Trading).
         """
@@ -59,7 +59,7 @@ class CircuitBreaker:
 
             if status_record:
                 status_record.status = "CLOSED"
-                status_record.details = "Reset by system/operator"
+                status_record.details = reason or "Reset by system/operator"
                 status_record.last_updated_utc = datetime.now(UTC)
 
         await db_write(reset_breaker)

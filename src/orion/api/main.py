@@ -698,7 +698,7 @@ async def reset_circuit_breaker(
             "state": state_before,
         }
 
-    await cb.close()
+    await cb.close(reason)
     logger.info(
         "Circuit breaker reset via admin API",
         extra={"event_type": "CIRCUIT_BREAKER_ADMIN_RESET", "reason": reason, "previous_state": state_before},
