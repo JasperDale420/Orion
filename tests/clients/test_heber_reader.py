@@ -108,6 +108,72 @@ def test_read_bars_filters_instrument_and_asof(tmp_path: Path) -> None:
     assert set(result["symbol"]) == {"AAPL"}
 
 
+def _bars_frame(ts: datetime, close: float) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "instrument_key": ["equity:AAPL"],
+            "bar_start_ts": [ts],
+            "ts_available": [ts],
+            "open": [close],
+            "high": [close],
+            "low": [close],
+            "close": [close],
+            "volume": [10],
+        }
+    )
+
+
+def test_read_bars_prunes_partitions_before_start_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A bounded read must never open dt= partitions older than start_time.
+
+    The silver bars feed keeps every partition ever synced (183k files back to
+    2024-01-02), and ingestion hydration asks for a 5-day window per ticker.
+    Row-level time filtering alone still opens every file's footer, which is
+    what made each ticker take 70+ seconds at startup.
+    """
+    now = datetime(2026, 8, 16, 14, 0, tzinfo=UTC)
+    yesterday = now - timedelta(days=1)
+    bars_root = tmp_path / "silver" / "feed=bars" / "instrument_type=equity"
+    ancient_file = bars_root / "dt=2024-01-02" / "part-0.parquet"
+    recent_file = bars_root / f"dt={now.date().isoformat()}" / "part-0.parquet"
+    _write_parquet(ancient_file, _bars_frame(datetime(2024, 1, 2, 14, 30, tzinfo=UTC), 50.0))
+    _write_parquet(recent_file, _bars_frame(now - timedelta(minutes=5), 100.0))
+
+    opened: list[str] = []
+    real_read_table = pq.read_table
+
+    def _spy(source, **kwargs):  # type: ignore[no-untyped-def]
+        opened.extend(source if isinstance(source, list) else [str(source)])
+        return real_read_table(source, **kwargs)
+
+    monkeypatch.setattr("orion.clients.heber_reader.pq.read_table", _spy)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_bars(symbols=["AAPL"], asof_time=now, start_time=yesterday, end_time=now)
+
+    assert str(ancient_file) not in opened, "partition older than start_time was opened"
+    assert str(recent_file) in opened
+    assert len(result) == 1
+    assert float(result.iloc[0]["close"]) == 100.0
+
+
+def test_read_bars_without_start_time_reads_all_partitions(tmp_path: Path) -> None:
+    """No start_time means no pruning — full-history callers keep every partition."""
+    now = datetime(2026, 8, 16, 14, 0, tzinfo=UTC)
+    bars_root = tmp_path / "silver" / "feed=bars" / "instrument_type=equity"
+    _write_parquet(
+        bars_root / "dt=2024-01-02" / "part-0.parquet", _bars_frame(datetime(2024, 1, 2, 14, 30, tzinfo=UTC), 50.0)
+    )
+    _write_parquet(
+        bars_root / f"dt={now.date().isoformat()}" / "part-0.parquet", _bars_frame(now - timedelta(minutes=5), 100.0)
+    )
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_bars(symbols=["AAPL"], asof_time=now)
+
+    assert set(result["close"]) == {50.0, 100.0}
+
+
 def test_read_bars_rejects_unsupported_timeframe(tmp_path: Path) -> None:
     base = datetime(2026, 2, 5, 14, 0, tzinfo=UTC)
     bars = pd.DataFrame(
