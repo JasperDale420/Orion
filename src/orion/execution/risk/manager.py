@@ -244,18 +244,28 @@ class RiskManager:
         """Current UTC time. Single seam for everything that derives the trading date."""
         return datetime.now(UTC)
 
-    @staticmethod
-    def _fill_trading_date(filled_at: datetime | None) -> date | None:
-        """Trading date a broker fill executed on, or None when no time is known.
+    def _fill_outside_session_reason(self, filled_at: datetime | None) -> str | None:
+        """Why a broker fill time fails to prove the fill belongs to the current
+        daily-loss session, or None when it does.
 
-        A naive timestamp is taken as UTC, matching how the fill ledger coerces
-        Gateway timestamps.
+        Only a timezone-aware time whose America/New_York date equals the
+        session date qualifies. Missing, naive, prior-day and future times all
+        leave the session unproven; the caller then refuses to let a gain lower
+        today's loss (that would buy headroom on evidence we do not have) while
+        still charging a loss against it.
         """
         if filled_at is None:
-            return None
+            return "no_fill_time"
         if filled_at.tzinfo is None:
-            filled_at = filled_at.replace(tzinfo=UTC)
-        return _trading_date(filled_at)
+            return "naive_fill_time"
+        if self._daily_loss_date is None:
+            return "no_session_date"
+        fill_day = _trading_date(filled_at)
+        if fill_day < self._daily_loss_date:
+            return "prior_session"
+        if fill_day > self._daily_loss_date:
+            return "future_fill_time"
+        return None
 
     def _roll_daily_loss_if_new_day(self) -> bool:
         """Zero ``current_daily_loss`` when the trading date has advanced past
@@ -881,13 +891,13 @@ class RiskManager:
         Calculates Realized PnL using robust signed arithmetic.
         Idempotent: Checks fill_id against in-memory history.
 
-        ``filled_at`` is the broker's execution time. Realized P&L is booked
-        into ``current_daily_loss`` only when the fill belongs to the current
-        trading session: a fill from an earlier session that is only being
-        processed now (recovered after a restart or a poll miss) still moves
-        equity and positions, but its session's budget is closed, so it neither
-        buys headroom under today's limit nor consumes it. Without a timestamp
-        the fill is booked into the current session.
+        ``filled_at`` is the broker's execution time and decides how realized
+        P&L reaches ``current_daily_loss`` (the kill-switch input). A loss is
+        always charged against today's figure. A gain lowers it only when
+        ``filled_at`` is timezone-aware and falls on today's America/New_York
+        trading date; a gain from an earlier session (a fill recovered late
+        after a restart or a poll miss), or with a missing, naive or future time,
+        still moves equity and positions but buys no admission headroom.
 
         Returns a ``FillOutcome`` so the caller can persist realized PnL on a
         closing fill. A duplicate (already-processed) fill returns a neutral
@@ -968,28 +978,33 @@ class RiskManager:
             realized_pnl = pnl
 
             self.current_equity += realized_pnl
-            fill_trading_date = self._fill_trading_date(filled_at)
-            if (
-                fill_trading_date is not None
-                and self._daily_loss_date is not None
-                and (fill_trading_date < self._daily_loss_date)
-            ):
+            # Fail-closed session attribution for the kill-switch input: a loss
+            # always tightens today's budget, whatever session it came from; a
+            # gain relaxes it only when the broker time proves the fill is
+            # today's. Otherwise the gain still books to equity but buys no
+            # admission headroom.
+            outside_reason = self._fill_outside_session_reason(filled_at)
+            applied = realized_pnl <= 0 or outside_reason is None
+            if applied:
+                self.current_daily_loss -= realized_pnl
+            if outside_reason is not None:
                 logger.warning(
-                    f"Late fill for {ticker}: executed {fill_trading_date.isoformat()}, processed "
-                    f"{self._daily_loss_date.isoformat()}. Realized PnL=${realized_pnl:.2f} belongs to that closed "
-                    f"session and is NOT booked into today's daily loss (still ${self.current_daily_loss:.2f}).",
+                    f"Fill for {ticker} is not provably in the current session ({outside_reason}, filled_at="
+                    f"{filled_at.isoformat() if filled_at is not None else None}). Realized PnL=${realized_pnl:.2f} "
+                    f"{'charged against' if applied else 'NOT credited to'} today's daily loss "
+                    f"(now ${self.current_daily_loss:.2f}).",
                     extra={
-                        "event_type": "RISK_LATE_FILL_PRIOR_SESSION",
+                        "event_type": "RISK_FILL_OUTSIDE_SESSION",
                         "ticker": ticker,
                         "fill_id": fill_id,
+                        "reason": outside_reason,
+                        "filled_at": filled_at.isoformat() if filled_at is not None else None,
                         "realized_pnl": realized_pnl,
-                        "fill_trading_date": fill_trading_date.isoformat(),
-                        "trading_date": self._daily_loss_date.isoformat(),
+                        "applied_to_daily_loss": applied,
+                        "trading_date": self._daily_loss_date.isoformat() if self._daily_loss_date else None,
                         "daily_loss": self.current_daily_loss,
                     },
                 )
-            else:
-                self.current_daily_loss -= realized_pnl
 
             logger.info(
                 f"Fill Processed for {ticker}: Realized PnL=${realized_pnl:.2f}. New DailyLoss=${self.current_daily_loss:.2f}",
