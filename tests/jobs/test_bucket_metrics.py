@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from orion.jobs.bucket_halt import RESUMED_STATUS, SET_BY_OPERATOR, active_halts, list_halts, record_halt
 from orion.jobs.bucket_metrics import (
     HALT_TRAILING_WINDOW,
     GroupStats,
@@ -216,15 +217,32 @@ async def test_routine_metrics_are_logged_without_discord_page():
 
 @pytest.mark.asyncio
 async def test_actionable_metrics_still_page_discord():
-    metrics = {
+    metrics = _halting_metrics()
+    sent = AsyncMock(return_value=True)
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=metrics)),
+        patch("orion.shared.alerts.send_discord_alert", sent),
+    ):
+        await run_bucket_metrics()
+
+    sent.assert_awaited_once()
+
+
+# ── Verdicts that act: the halting verdict writes a durable entry halt ────
+
+
+def _halting_metrics(n: int = 100, trailing_pf: float = 0.5) -> dict:
+    return {
         "window_days": 30,
-        "closed_trades": 100,
+        "closed_trades": n,
         "by_bucket": {
             "SWING": {
-                "n": 100,
+                "n": n,
                 "win_rate": 0.2,
                 "expectancy": -20.0,
                 "profit_factor": 0.5,
+                "trailing_pf": trailing_pf,
                 "avg_hold_hours": 12.0,
                 "exit_reason_mix": {"stop_loss_v1": 80},
                 "verdict": "consider_halting",
@@ -232,10 +250,125 @@ async def test_actionable_metrics_still_page_discord():
         },
         "by_rule": {},
     }
-    sent = AsyncMock(return_value=True)
+
+
+@pytest.mark.asyncio
+async def test_halting_verdict_writes_a_halt_row_once():
+    await init_db()
+    metrics = _halting_metrics()
 
     with (
         patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=metrics)),
+        patch("orion.shared.alerts.send_discord_alert", AsyncMock(return_value=True)),
+    ):
+        await run_bucket_metrics()
+        first = await active_halts()
+        assert first["SWING"].profit_factor == 0.5
+        assert first["SWING"].n_closed == 100
+
+        # A second nightly pass must neither duplicate nor extend the halt.
+        await run_bucket_metrics()
+
+    second = await active_halts()
+    assert list(second) == ["SWING"]
+    assert second["SWING"].expires_after_session == first["SWING"].expires_after_session
+
+
+@pytest.mark.asyncio
+async def test_collecting_verdict_on_a_tiny_sample_writes_no_halt():
+    await init_db()
+    metrics = _halting_metrics(n=5)
+    metrics["by_bucket"]["SWING"]["verdict"] = "collecting"
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=metrics)),
+        patch("orion.shared.alerts.send_discord_alert", AsyncMock(return_value=True)),
+    ):
+        await run_bucket_metrics()
+
+    assert await active_halts() == {}
+
+
+@pytest.mark.asyncio
+async def test_halting_verdict_under_the_trailing_window_writes_no_halt():
+    """Defence in depth: the criterion needs a full trailing window behind it."""
+    await init_db()
+    metrics = _halting_metrics(n=HALT_TRAILING_WINDOW - 1)
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=metrics)),
+        patch("orion.shared.alerts.send_discord_alert", AsyncMock(return_value=True)),
+    ):
+        await run_bucket_metrics()
+
+    assert await active_halts() == {}
+
+
+@pytest.mark.asyncio
+async def test_nightly_pass_releases_an_expired_halt():
+    """Time-boxed: a halted bucket has to be able to resume and prove itself."""
+    await init_db()
+    stale = datetime.now(UTC) - timedelta(days=120)
+    await record_halt("POSITION", profit_factor=0.3, n_closed=60, now=stale)
+
+    metrics = _halting_metrics()
+    metrics["by_bucket"] = {}
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=metrics)),
+        patch("orion.shared.alerts.send_discord_alert", AsyncMock(return_value=True)),
+    ):
+        await run_bucket_metrics()
+
+    # The bucket stops gating and starts its sampling window.
+    assert await active_halts() == {}
+    assert [(h.bucket, h.status) for h in await list_halts()] == [("POSITION", RESUMED_STATUS)]
+
+
+@pytest.mark.asyncio
+async def test_a_released_bucket_is_not_rehalted_by_the_same_nightly_pass():
+    """A halted bucket closes no new trades, so the trailing fifty that halted
+    it are unchanged the night its window lapses. Re-halting on them would make
+    the ten-session time-box a permanent halt in disguise."""
+    await init_db()
+    stale = datetime.now(UTC) - timedelta(days=120)
+    await record_halt("SWING", profit_factor=0.5, n_closed=100, now=stale)
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=_halting_metrics())),
+        patch("orion.shared.alerts.send_discord_alert", AsyncMock(return_value=True)),
+    ):
+        await run_bucket_metrics()
+
+    assert await active_halts() == {}
+    assert [(h.bucket, h.status) for h in await list_halts()] == [("SWING", RESUMED_STATUS)]
+
+
+@pytest.mark.asyncio
+async def test_nightly_pass_never_overwrites_an_operator_halt():
+    await init_db()
+    await record_halt("SWING", profit_factor=None, n_closed=None, set_by=SET_BY_OPERATOR, reason="operator hold")
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=_halting_metrics())),
+        patch("orion.shared.alerts.send_discord_alert", AsyncMock(return_value=True)),
+    ):
+        await run_bucket_metrics()
+
+    halts = await active_halts()
+    assert halts["SWING"].set_by == SET_BY_OPERATOR
+    assert halts["SWING"].reason == "operator hold"
+
+
+@pytest.mark.asyncio
+async def test_halt_write_failure_does_not_lose_the_advisory_alert():
+    """The halt is an addition to the advisory path, not a replacement."""
+    await init_db()
+    sent = AsyncMock(return_value=True)
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=_halting_metrics())),
+        patch("orion.jobs.bucket_metrics.apply_halt_verdicts", AsyncMock(side_effect=RuntimeError("db down"))),
         patch("orion.shared.alerts.send_discord_alert", sent),
     ):
         await run_bucket_metrics()

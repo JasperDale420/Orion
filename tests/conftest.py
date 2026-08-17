@@ -133,6 +133,22 @@ async def setup_test_db(monkeypatch):
         monkeypatch.setattr(db, "engine", old_engine)
 
 
+@pytest.fixture(autouse=True)
+def reset_bucket_halt_cache():
+    """Clear the per-bucket entry-halt cache around every test.
+
+    The entry gate caches halt rows in-process for 60s to stay off the hot
+    path. Within a single pytest process that cache outlives the in-memory DB
+    it was read from, so without this a halt written by one test would gate
+    (or a warm empty read would un-gate) an unrelated later one.
+    """
+    from orion.jobs.bucket_halt import reset_halt_cache
+
+    reset_halt_cache()
+    yield
+    reset_halt_cache()
+
+
 @pytest.fixture
 def risk_manager_factory():
     """Factory fixture to create RiskManager instances with custom config."""

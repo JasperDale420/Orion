@@ -10,8 +10,12 @@ Verdicts follow the sample-size discipline from the 2026-07 recovery plan:
 under 30 closed trades touch nothing; at 100 the first expectancy verdict
 is meaningful (SE of a ~40% win rate is ±5pp); sizing up requires n>=100,
 positive expectancy, and PF>=1.15; a trailing-50 PF under 0.6 flags the
-bucket for halting. Actionable verdicts are ADVISORY Discord alerts; routine
-results remain in structured logs and never act.
+bucket for halting.
+
+The halting verdict acts: it opens a time-boxed per-bucket entry halt (see
+``orion.jobs.bucket_halt``) that ``preflight_live_signal`` enforces on new
+entries only. Every other verdict stays advisory — sizing up is still a human
+decision — and routine results remain in structured logs.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from orion.execution.exit_fallback_rules import bucket_for_dte
+from orion.jobs.bucket_halt import record_halt, release_expired_halts
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models_gold import CandidateTrade, ExitDecision
@@ -191,8 +196,47 @@ def _format_summary(metrics: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+async def apply_halt_verdicts(metrics: dict[str, Any], *, now: datetime | None = None) -> list[str]:
+    """Turn ``consider_halting`` verdicts into durable per-bucket entry halts.
+
+    Releases lapsed halts first, so a bucket that has served its window starts
+    its sampling window before this pass re-measures it. A bucket that is still
+    failing after that window is simply halted again. Returns one
+    human-readable line per action taken, for the nightly alert.
+    """
+    actions = [
+        f"resumed {halt.bucket} — sampling until {halt.expires_after_session.isoformat()}"
+        for halt in await release_expired_halts(now=now)
+    ]
+
+    for bucket, stats in metrics["by_bucket"].items():
+        # The same criterion GroupStats.summary applies, restated so a caller
+        # cannot hand us a halting verdict without the sample behind it.
+        if stats["verdict"] != "consider_halting" or (stats.get("n") or 0) < HALT_TRAILING_WINDOW:
+            continue
+        write = await record_halt(
+            bucket,
+            profit_factor=stats.get("trailing_pf"),
+            n_closed=stats.get("n"),
+            now=now,
+            reason=f"trailing-{HALT_TRAILING_WINDOW} PF below {HALT_TRAILING_PROFIT_FACTOR}",
+        )
+        # Never silent about a halt the criterion asked for but did not get:
+        # each of these is something the operator has to be able to see.
+        if write.outcome == "written" and write.halt is not None:
+            actions.append(f"HALTED {write.halt.describe()}")
+        elif write.outcome == "operator_halt_present":
+            actions.append(f"{bucket} halt suppressed by a live operator halt — clear it to re-arm the automatic one")
+        elif write.outcome == "resuming" and write.halt is not None:
+            actions.append(
+                f"{bucket} still failing but sampling until "
+                f"{write.halt.expires_after_session.isoformat()} — no new halt yet"
+            )
+    return actions
+
+
 async def run_bucket_metrics(days: int = 30, post_discord: bool = True) -> dict[str, Any]:
-    """Compute and log nightly metrics; page only actionable verdicts."""
+    """Compute and log nightly metrics; act on halts and page actionable verdicts."""
     metrics = await compute_bucket_metrics(days=days)
     logger.info(
         "bucket_metrics",
@@ -201,16 +245,29 @@ async def run_bucket_metrics(days: int = 30, post_discord: bool = True) -> dict[
         by_bucket=metrics["by_bucket"],
         by_rule=metrics["by_rule"],
     )
+
+    # The halt is an addition to the advisory path, not a replacement for it:
+    # a failure to write one must still leave the verdict alert to be sent.
+    halt_actions: list[str] = []
+    try:
+        halt_actions = await apply_halt_verdicts(metrics)
+    except Exception as e:
+        logger.error("bucket_halt_apply_failed", error=str(e), exc_info=True)
+        halt_actions = [f"halt update FAILED: {e}"]
+
     flagged = [
         f"{name} → {s['verdict']}"
         for name, s in metrics["by_bucket"].items()
         if s["verdict"] in ("consider_sizing_up", "consider_halting")
     ]
-    if post_discord and flagged:
+    if post_discord and (flagged or halt_actions):
         from orion.shared.alerts import send_discord_alert
 
         text = _format_summary(metrics)
-        text += "\n⚠ verdicts: " + "; ".join(flagged)
+        if flagged:
+            text += "\n⚠ verdicts: " + "; ".join(flagged)
+        if halt_actions:
+            text += "\n⛔ entry halts: " + "; ".join(halt_actions)
         await send_discord_alert(text, dedupe_key="bucket_metrics_nightly")
     return metrics
 
