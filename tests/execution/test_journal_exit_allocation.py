@@ -422,3 +422,67 @@ async def test_expiry_sweep_never_touches_a_fully_sold_lot() -> None:
     row = await _row("d1")
     assert row.notes == "closed_by=exit_full"
     assert row.realized_pnl == pytest.approx((1.50 - 1.10) * 100)
+
+
+@pytest.mark.asyncio
+async def test_inconsistent_cumulative_delta_is_refused_not_substituted() -> None:
+    """1@1.00 then cumulative 2@0.50 implies a 0.00 second leg — broker figures are inconsistent
+    with an option print; refuse the delta loudly rather than book a made-up price."""
+    await init_db()
+    exp = datetime(2026, 7, 10, tzinfo=UTC)
+    await _seed(_candidate("c1", "IREN", "IREN260710P00037000", exp), _lot("d1", "c1", "IREN", 2, 1.00))
+    await allocate_exit_to_journal(
+        contract="IREN260710P00037000",
+        order_id="exit_x",
+        order_cum_qty=1,
+        order_cum_avg_price=1.00,
+        filled_at=NOW,
+        source="live",
+    )
+    result = await allocate_exit_to_journal(
+        contract="IREN260710P00037000",
+        order_id="exit_x",
+        order_cum_qty=2,
+        order_cum_avg_price=0.50,
+        filled_at=NOW + timedelta(seconds=30),
+        source="live",
+    )
+    assert result.allocated_qty == pytest.approx(0)
+    assert result.unmatched_qty == pytest.approx(1)
+    row = await _row("d1")
+    assert row.exit_filled_qty == pytest.approx(1)
+    assert row.realized_pnl is None
+    assert len(row.raw_json["exit_allocations"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_allocation_scoped_to_decision_ids_never_touches_other_lots() -> None:
+    """The repair path passes an explicit lot scope; lots outside it are invisible to allocation."""
+    await init_db()
+    exp = datetime(2026, 7, 7, tzinfo=UTC)
+    await _seed(
+        _candidate("c1", "SPY", SPY_OCC, exp),
+        _candidate("c2", "SPY", SPY_OCC, exp),
+        _lot("d1", "c1", "SPY", 1, 2.89, created_offset_s=0),
+        _lot("d2", "c2", "SPY", 1, 2.90, created_offset_s=5),
+    )
+    from orion.execution.persistence import allocate_exit_in_session
+    from orion.shared.db_utils import db_write
+
+    async def go(session):  # type: ignore[no-untyped-def]
+        return await allocate_exit_in_session(
+            session,
+            contract=SPY_OCC,
+            order_id="exit_spy",
+            order_cum_qty=2,
+            order_cum_avg_price=2.00,
+            filled_at=NOW,
+            source="eod_reconcile",
+            only_decision_ids={"d2"},
+        )
+
+    result = await db_write(go)
+    assert result.allocated_qty == pytest.approx(1)
+    assert result.unmatched_qty == pytest.approx(1)
+    assert (await _row("d1")).realized_pnl is None
+    assert (await _row("d2")).realized_pnl == pytest.approx((2.00 - 2.90) * 100)

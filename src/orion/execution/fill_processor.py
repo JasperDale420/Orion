@@ -108,14 +108,29 @@ class FillProcessor:
 
                 # The close fill's timestamp must reach exit_filled_at_utc — the
                 # PnL reconciliation buckets journal realizations by EXIT day.
-                await allocate_exit_to_journal(
-                    contract=ticker,
-                    order_id=order_id,
-                    order_cum_qty=filled_qty,
-                    order_cum_avg_price=filled_avg_price,
-                    filled_at=_coerce_timestamp(filled_at_raw),
-                    source="live",
-                )
+                # A journal write failure must not stop the fill row and its
+                # processed marker from landing below: the fills row is what the
+                # EOD reconcile heals the journal from.
+                try:
+                    await allocate_exit_to_journal(
+                        contract=ticker,
+                        order_id=order_id,
+                        order_cum_qty=filled_qty,
+                        order_cum_avg_price=filled_avg_price,
+                        filled_at=_coerce_timestamp(filled_at_raw),
+                        source="live",
+                    )
+                except Exception as alloc_exc:
+                    logger.error(
+                        f"Journal exit allocation failed for {ticker} order {order_id}; EOD reconcile will retry",
+                        extra={
+                            "event_type": "EXIT_ALLOCATION_FAILED",
+                            "ticker": ticker,
+                            "order_id": order_id,
+                            "error": str(alloc_exc),
+                        },
+                        exc_info=True,
+                    )
 
             # Update sector exposure tracking
             sector = SECTOR_MAPPING.get(ticker)

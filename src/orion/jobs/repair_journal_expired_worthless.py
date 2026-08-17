@@ -111,8 +111,9 @@ async def run_repair(manifest: Path, *, apply: bool) -> RepairReport:
             r.raw_json = raw
         await session.flush()
 
-        await reconcile_exits_in_session(session)
-        await sweep_expired_in_session(session)
+        scope = {r.decision_id for r in rows}
+        await reconcile_exits_in_session(session, only_decision_ids=scope)
+        await sweep_expired_in_session(session, only_decision_ids=scope)
         await session.flush()
 
         still_open = [r.decision_id for r in rows if r.realized_pnl is None]

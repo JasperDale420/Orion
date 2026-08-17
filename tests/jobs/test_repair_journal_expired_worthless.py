@@ -214,3 +214,60 @@ async def test_repair_refuses_when_no_sell_fill_and_lot_would_stay_open(tmp_path
 
     row = await _row("dec_nvda")
     assert row.realized_pnl == pytest.approx(-285.0)
+
+
+@pytest.mark.asyncio
+async def test_repair_never_touches_open_lots_outside_the_manifest(tmp_path: Path) -> None:
+    """An unrelated OPEN lot with a recorded sell (and an unrelated expired open lot) must be left
+    exactly as-is by the repair — its reconcile/sweep are scoped to the manifest ids."""
+    manifest = tmp_path / "manifest.csv"
+    await _seed(sold=True, manifest=manifest)
+    async with async_session_factory() as session:
+        session.add(
+            CandidateTrade(
+                candidate_id="c_other",
+                ticker="AMD",
+                timestamp_utc=ENTRY_AT,
+                rule_id="rule_swing_v2",
+                direction="LONG",
+                option_symbol="AMD260710C00150000",
+                expiration_date=datetime(2026, 7, 10, tzinfo=UTC),
+                evidence={},
+            )
+        )
+        session.add(
+            TradeJournalEntry(
+                decision_id="dec_other_open",
+                signal_id="s9",
+                candidate_id="c_other",
+                ticker="AMD",
+                direction="LONG",
+                client_order_id="orion_e9",
+                broker_order_id="b_e9",
+                filled_qty=1,
+                filled_avg_price=2.00,
+                filled_at_utc=ENTRY_AT,
+                raw_json={},
+            )
+        )
+        session.add(
+            FillRecord(
+                id="f_other_sell",
+                ticker="AMD260710C00150000",
+                broker_order_id="b_x9",
+                client_order_id="orion_x9",
+                filled_qty=1,
+                filled_avg_price=3.00,
+                side="sell",
+                filled_at_utc=ENTRY_AT + timedelta(hours=1),
+                raw_json={},
+            )
+        )
+        await session.commit()
+
+    report = await run_repair(manifest, apply=True)
+    assert {r.decision_id for r in report.rows} == {"dec_nvda", "dec_dust"}
+    other = await _row("dec_other_open")
+    assert other.realized_pnl is None
+    assert other.exit_filled_qty is None
+    assert other.notes is None

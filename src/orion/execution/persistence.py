@@ -564,6 +564,7 @@ async def allocate_exit_in_session(
     order_cum_avg_price: float,
     filled_at: datetime | None,
     source: str,
+    only_decision_ids: set[str] | None = None,
 ) -> ExitAllocationResult:
     """Allocate a closing order's CUMULATIVE fill across the open journal lots of ``contract``.
 
@@ -582,7 +583,8 @@ async def allocate_exit_in_session(
 
     Rows are locked ``FOR UPDATE`` on PostgreSQL so concurrent allocators
     serialize per contract (SQLite ignores the clause; the DB-level retry wrapper
-    is the only guard there).
+    is the only guard there). ``only_decision_ids`` restricts the visible lots
+    (the scoped repair path); the live and EOD paths leave it None.
     """
     from orion.storage.models_trade_journal import TradeJournalEntry
 
@@ -598,6 +600,8 @@ async def allocate_exit_in_session(
         .order_by(TradeJournalEntry.created_at_utc.asc(), TradeJournalEntry.decision_id.asc())
         .with_for_update(of=TradeJournalEntry)
     )
+    if only_decision_ids is not None:
+        stmt = stmt.where(TradeJournalEntry.decision_id.in_(sorted(only_decision_ids)))
     rows = (await session.execute(stmt)).all()
 
     already_qty = 0.0
@@ -609,22 +613,46 @@ async def allocate_exit_in_session(
                 already_qty += q
                 already_value += q * float(leg.get("price") or 0.0)
 
+    cum_value = float(order_cum_qty) * float(order_cum_avg_price)
     leg_qty = float(order_cum_qty) - already_qty
     if leg_qty <= 1e-9:
+        if already_qty > 0 and abs(cum_value - already_value) > 1e-6:
+            # Same quantity, different average: the broker revised a price the
+            # ledger already booked. Nothing is allocated; the discrepancy is
+            # surfaced for a human rather than silently rewritten.
+            logger.warning(
+                "Broker cumulative average differs from the booked ledger for a fully allocated order",
+                extra={
+                    "event_type": "EXIT_ALLOCATION_PRICE_REVISION",
+                    "contract": contract,
+                    "order_id": order_id,
+                    "ledger_value": already_value,
+                    "broker_value": cum_value,
+                },
+            )
         return ExitAllocationResult()
-    leg_value = float(order_cum_qty) * float(order_cum_avg_price) - already_value
+    leg_value = cum_value - already_value
     leg_price = leg_value / leg_qty
     if leg_price <= 0:
-        logger.warning(
-            "Exit leg price derived from cumulative figures is non-positive; using cumulative average",
+        # A non-positive leg means the broker's cumulative figures are inconsistent
+        # with what was already booked (an option never prints at 0.00). Booking
+        # any substitute price would misstate P&L by the contract multiplier;
+        # refuse the delta and leave the lot open for a human / the EOD retry.
+        logger.error(
+            "Refusing exit allocation: cumulative figures imply a non-positive leg price",
             extra={
-                "event_type": "EXIT_ALLOCATION_LEG_PRICE_FALLBACK",
+                "event_type": "EXIT_ALLOCATION_INCONSISTENT_CUMULATIVE",
                 "contract": contract,
                 "order_id": order_id,
+                "leg_qty": leg_qty,
                 "leg_price": leg_price,
+                "already_qty": already_qty,
+                "already_value": already_value,
+                "broker_cum_qty": float(order_cum_qty),
+                "broker_cum_avg": float(order_cum_avg_price),
             },
         )
-        leg_price = float(order_cum_avg_price)
+        return ExitAllocationResult(unmatched_qty=leg_qty)
 
     multiplier = _journal_multiplier(contract)
     remaining = leg_qty
@@ -691,7 +719,7 @@ async def allocate_exit_to_journal(
     return await db_write(write)
 
 
-async def reconcile_exits_in_session(session: Any) -> int:
+async def reconcile_exits_in_session(session: Any, *, only_decision_ids: set[str] | None = None) -> int:
     """Attribute Orion-owned SELL fills recorded in ``fills`` to any journal lot still open.
 
     Heals closes the live path missed (a fill polled while the risk manager had
@@ -719,6 +747,8 @@ async def reconcile_exits_in_session(session: Any) -> int:
         )
         .group_by(contract_expr)
     )
+    if only_decision_ids is not None:
+        stmt = stmt.where(TradeJournalEntry.decision_id.in_(sorted(only_decision_ids)))
     open_contracts = list((await session.execute(stmt)).all())
 
     closed = 0
@@ -747,6 +777,7 @@ async def reconcile_exits_in_session(session: Any) -> int:
                 order_cum_avg_price=avg_price,
                 filled_at=fill.filled_at_utc,
                 source="eod_reconcile",
+                only_decision_ids=only_decision_ids,
             )
             closed += result.closed_rows
     if closed:
@@ -851,7 +882,7 @@ async def realize_expired_journal_rows() -> int:
         raise
 
 
-async def sweep_expired_in_session(session: Any) -> int:
+async def sweep_expired_in_session(session: Any, *, only_decision_ids: set[str] | None = None) -> int:
     """The expiry sweep body; see `realize_expired_journal_rows`."""
     from orion.storage.models_trade_journal import TradeJournalEntry
 
@@ -868,6 +899,8 @@ async def sweep_expired_in_session(session: Any) -> int:
         )
         .with_for_update(of=TradeJournalEntry)
     )
+    if only_decision_ids is not None:
+        stmt = stmt.where(TradeJournalEntry.decision_id.in_(sorted(only_decision_ids)))
     rows = (await session.execute(stmt)).all()
     realized = 0
     for entry, expiration_date in rows:
