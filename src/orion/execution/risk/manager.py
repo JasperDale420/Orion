@@ -248,11 +248,13 @@ class RiskManager:
         """Why a broker fill time fails to prove the fill belongs to the current
         daily-loss session, or None when it does.
 
-        Only a timezone-aware time whose America/New_York date equals the
-        session date qualifies. Missing, naive, prior-day and future times all
-        leave the session unproven; the caller then refuses to let a gain lower
-        today's loss (that would buy headroom on evidence we do not have) while
-        still charging a loss against it.
+        Only a timezone-aware time that is not after the clock and whose
+        America/New_York date equals the session date qualifies. Missing, naive,
+        prior-day and future times (even later on today's date — that is a
+        prediction, not an executed fill) all leave the session unproven; the
+        caller then refuses to let a gain lower today's loss (that would buy
+        headroom on evidence we do not have) while still charging a loss
+        against it.
         """
         if filled_at is None:
             return "no_fill_time"
@@ -260,6 +262,8 @@ class RiskManager:
             return "naive_fill_time"
         if self._daily_loss_date is None:
             return "no_session_date"
+        if filled_at > self._now():
+            return "future_fill_time"
         fill_day = _trading_date(filled_at)
         if fill_day < self._daily_loss_date:
             return "prior_session"

@@ -293,7 +293,9 @@ OUTSIDE_SESSION_FILL_TIMES = [
     pytest.param(None, "no_fill_time", id="missing"),
     pytest.param(datetime(2026, 8, 14, 10, 55), "naive_fill_time", id="naive"),
     pytest.param(LATE_PRIOR_DAY_FILL_AT, "prior_session", id="prior-day"),
-    pytest.param(FROZEN_NOW + timedelta(days=1), "future_fill_time", id="future"),
+    pytest.param(FROZEN_NOW + timedelta(days=1), "future_fill_time", id="future-day"),
+    # Same New York date but after the clock: future evidence, not an executed fill.
+    pytest.param(FROZEN_NOW + timedelta(minutes=1), "future_fill_time", id="later-today"),
 ]
 
 
