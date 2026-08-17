@@ -1,0 +1,2 @@
+outcome,features,oos_auc,lo95,hi95,n_train,n_test,exp_all,exp_top_half
+y_tp,"f_dte,f_vol_oi,f_ask_share,f_trade_count,f_prior_flow_align",0.6734756097560977,0.5587608712839975,0.772326337650981,794,204,-0.006134559000679781,0.004613747041435547
