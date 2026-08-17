@@ -17,7 +17,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import logging
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -62,17 +62,23 @@ def _rollover_payloads(caplog) -> list[dict]:
     return payloads
 
 
-async def _seed_row(*, loss: float, day: date | None, version: int | None = RISK_ACCOUNTING_VERSION) -> None:
+async def _seed_row(
+    *,
+    loss: float,
+    day: date | None,
+    version: int | None = RISK_ACCOUNTING_VERSION,
+    updated_at: datetime | None = None,
+) -> None:
     await init_db()
     async with async_session_factory() as session:
         await session.execute(text("DELETE FROM risk_state"))
         await session.execute(
             text(
-                "INSERT INTO risk_state (id, current_daily_loss, current_equity, starting_equity, "
+                "INSERT INTO risk_state (id, updated_at_utc, current_daily_loss, current_equity, starting_equity, "
                 "peak_equity, open_positions_count, accounting_version, daily_loss_date) "
-                "VALUES ('global_risk_v1', :loss, 100000.0, 100000.0, 100000.0, 0, :ver, :day)"
+                "VALUES ('global_risk_v1', :updated_at, :loss, 100000.0, 100000.0, 100000.0, 0, :ver, :day)"
             ),
-            {"loss": loss, "ver": version, "day": day},
+            {"updated_at": updated_at, "loss": loss, "ver": version, "day": day},
         )
         await session.commit()
 
@@ -152,9 +158,18 @@ async def test_stale_row_loads_as_zero(frozen_clock, caplog):
 
 
 @pytest.mark.asyncio
-async def test_legacy_row_without_date_loads_as_zero(frozen_clock, caplog):
-    """A row written before the date column existed has no day identity."""
-    await _seed_row(loss=1500.0, day=None)
+@pytest.mark.parametrize(
+    "last_written",
+    [
+        pytest.param(None, id="never-stamped"),
+        pytest.param(datetime(2026, 8, 13, 20, 0, tzinfo=UTC), id="yesterday-16:00-ET"),
+        pytest.param(datetime(2026, 8, 14, 3, 30, tzinfo=UTC), id="yesterday-23:30-ET"),
+    ],
+)
+async def test_legacy_row_without_date_loads_as_zero(frozen_clock, caplog, last_written):
+    """A row written before the date column existed has no day identity, and
+    its last write was an earlier session: it starts today at zero."""
+    await _seed_row(loss=1500.0, day=None, updated_at=last_written)
     caplog.set_level(logging.INFO, logger="orion.execution.risk.manager")
 
     rm = RiskManager(config=LIMIT)
@@ -168,6 +183,30 @@ async def test_legacy_row_without_date_loads_as_zero(frozen_clock, caplog):
     assert payloads[0]["discarded_loss"] == pytest.approx(1500.0)
     assert payloads[0]["discarded_date"] is None
     assert payloads[0]["legacy_row"] is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_row_last_written_today_keeps_its_loss(frozen_clock, caplog):
+    """Deployment window: the column is added mid-session, so the live row is
+    NULL-dated but its figure was written TODAY and may already be at the
+    limit. It must stay in force — the loss is retained under today's date,
+    never zeroed on an unknown-date row that was current this session."""
+    await _seed_row(loss=1500.0, day=None, updated_at=FROZEN_NOW - timedelta(hours=1))
+    caplog.set_level(logging.INFO, logger="orion.execution.risk.manager")
+
+    rm = RiskManager(config=LIMIT)
+    await rm.initialize()
+
+    assert rm.current_daily_loss == pytest.approx(1500.0)
+    assert rm._daily_loss_date == TODAY
+    assert rm.check_order("AAPL", 1, 100.0, "buy") is False
+    assert _rollover_payloads(caplog) == [], "nothing was discarded"
+
+    # The inferred date is persisted, so the next restart is unambiguous.
+    await rm._save_state()
+    row = await _persisted_row()
+    assert row.daily_loss_date == TODAY
+    assert row.current_daily_loss == pytest.approx(1500.0)
 
 
 @pytest.mark.asyncio
@@ -227,6 +266,108 @@ async def test_process_fill_after_midnight_rolls_before_accumulating(frozen_cloc
     row = await _persisted_row()
     assert row.current_daily_loss == pytest.approx(200.0)
     assert row.daily_loss_date == TODAY
+
+
+async def _manager_with_open_long() -> RiskManager:
+    await init_db()
+    async with async_session_factory() as session:
+        await session.execute(text("DELETE FROM risk_state"))
+        await session.commit()
+    rm = RiskManager(config=LIMIT)
+    rm.current_equity = 100000.0
+    rm.current_daily_loss = 900.0
+    rm._daily_loss_date = TODAY
+    rm.positions["AAPL"] = {"qty": 10.0, "avg_entry": 100.0}
+    return rm
+
+
+# A fill that executed at 15:59 ET yesterday but is only being processed now
+# (recovered after a restart / poll miss). Its P&L belongs to yesterday's
+# session, whose budget is closed.
+LATE_PRIOR_DAY_FILL_AT = datetime(2026, 8, 13, 19, 59, tzinfo=UTC)
+
+
+@pytest.mark.asyncio
+async def test_late_prior_day_gain_does_not_credit_today(frozen_clock, caplog):
+    """A recovered prior-session GAIN must not buy headroom under today's limit."""
+    rm = await _manager_with_open_long()
+    caplog.set_level(logging.INFO, logger="orion.execution.risk.manager")
+
+    outcome = await rm.process_fill("AAPL", 10, 150.0, "sell", fill_id="late_gain", filled_at=LATE_PRIOR_DAY_FILL_AT)
+
+    assert outcome.realized_pnl == pytest.approx(500.0)
+    assert rm.current_daily_loss == pytest.approx(900.0), "yesterday's gain must not lower today's loss"
+    assert rm.current_equity == pytest.approx(100500.0), "equity is cumulative and still books it"
+    assert rm._daily_loss_date == TODAY
+    late = [
+        json.loads(r.getMessage())["extra"]
+        for r in caplog.records
+        if '"RISK_LATE_FILL_PRIOR_SESSION"' in r.getMessage()
+    ]
+    assert len(late) == 1
+    assert late[0]["fill_trading_date"] == YESTERDAY.isoformat()
+    assert late[0]["realized_pnl"] == pytest.approx(500.0)
+
+
+@pytest.mark.asyncio
+async def test_late_prior_day_loss_does_not_debit_today(frozen_clock):
+    """Symmetric: a recovered prior-session LOSS belongs to that session's
+    (closed) budget, not today's."""
+    rm = await _manager_with_open_long()
+
+    outcome = await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="late_loss", filled_at=LATE_PRIOR_DAY_FILL_AT)
+
+    assert outcome.realized_pnl == pytest.approx(-200.0)
+    assert rm.current_daily_loss == pytest.approx(900.0)
+    assert rm.current_equity == pytest.approx(99800.0)
+
+
+@pytest.mark.asyncio
+async def test_same_day_fill_with_timestamp_accumulates(frozen_clock):
+    rm = await _manager_with_open_long()
+
+    await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="same_day", filled_at=FROZEN_NOW - timedelta(minutes=5))
+
+    assert rm.current_daily_loss == pytest.approx(1100.0)
+
+
+@pytest.mark.asyncio
+async def test_fill_without_timestamp_accumulates_into_today(frozen_clock):
+    """Callers that cannot supply a broker time book into the current session."""
+    rm = await _manager_with_open_long()
+
+    await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="no_ts")
+
+    assert rm.current_daily_loss == pytest.approx(1100.0)
+
+
+@pytest.mark.asyncio
+async def test_fill_processor_passes_broker_fill_time_to_risk_accounting(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from orion.execution.fill_processor import FillProcessor
+
+    processor = FillProcessor()
+    risk_manager = MagicMock()
+    risk_manager.process_fill = AsyncMock()
+    monkeypatch.setattr("orion.execution.fill_processor.is_fill_processed", AsyncMock(return_value=False))
+    monkeypatch.setattr("orion.execution.fill_processor.mark_fill_processed", AsyncMock())
+    monkeypatch.setattr("orion.execution.fill_processor.persist_fill_record", AsyncMock())
+
+    fill = {
+        "id": "broker-late",
+        "client_order_id": "orion_late",
+        "symbol": "AAPL",
+        "filled_qty": 1.0,
+        "qty": 1.0,
+        "filled_avg_price": 2.5,
+        "side": "buy",
+        "filled_at": "2026-08-13T19:59:00Z",
+    }
+    await processor.process_single_fill(fill, risk_manager, AsyncMock())
+
+    kwargs = risk_manager.process_fill.await_args.kwargs
+    assert kwargs["filled_at"] == LATE_PRIOR_DAY_FILL_AT
 
 
 # ── Trading-date helper ─────────────────────────────────────────────────────

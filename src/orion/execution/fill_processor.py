@@ -6,6 +6,7 @@ from typing import Any
 
 from orion.core.enums import OrderSide
 from orion.execution.persistence import (
+    _coerce_timestamp,
     is_fill_processed,
     mark_fill_processed,
     persist_fill_record,
@@ -93,8 +94,12 @@ class FillProcessor:
                 },
             )
 
+            # The broker's execution time decides which trading session the
+            # realized P&L belongs to — a fill recovered late must not book
+            # into today's daily-loss figure.
+            filled_at = _coerce_timestamp(filled_at_raw)
             fill_outcome = await risk_manager.process_fill(
-                ticker, incremental_qty, filled_avg_price, side, fill_id=fill_marker
+                ticker, incremental_qty, filled_avg_price, side, fill_id=fill_marker, filled_at=filled_at
             )
 
             # Attribute realized PnL from a closing fill back to the originating
@@ -102,7 +107,7 @@ class FillProcessor:
             # matches the entry journal row, so persist_fill_record's
             # by-broker_order_id update can't reach it (B2 RCA).
             if getattr(fill_outcome, "is_closing", False):
-                from orion.execution.persistence import _coerce_timestamp, persist_realized_pnl_to_journal
+                from orion.execution.persistence import persist_realized_pnl_to_journal
 
                 # The close fill's timestamp must reach exit_filled_at_utc — the
                 # PnL reconciliation buckets journal realizations by EXIT day,
@@ -112,7 +117,7 @@ class FillProcessor:
                     ticker=ticker,
                     realized_pnl=fill_outcome.realized_pnl,
                     exit_broker_order_id=order_id,
-                    filled_at=_coerce_timestamp(filled_at_raw),
+                    filled_at=filled_at,
                     exit_qty=incremental_qty,
                     exit_price=filled_avg_price,
                 )
