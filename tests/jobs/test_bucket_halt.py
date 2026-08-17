@@ -6,11 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from orion.core.timekeeping import last_closed_trading_date, sessions_forward
 from orion.jobs import bucket_halt
 from orion.jobs.bucket_halt import (
     HALT_STATUS,
+    RESUMED_STATUS,
     SET_BY_MEASUREMENT,
     SET_BY_OPERATOR,
     active_halts,
@@ -74,7 +76,7 @@ async def test_record_halt_is_idempotent_and_never_extends() -> None:
     assert halts["SWING"].profit_factor == 0.42
 
 
-async def test_record_halt_never_overwrites_an_operator_halt() -> None:
+async def test_record_halt_never_overwrites_a_live_operator_halt() -> None:
     await init_db()
     await record_halt("SWING", profit_factor=None, n_closed=None, set_by=SET_BY_OPERATOR, now=MONDAY_UTC)
 
@@ -84,6 +86,46 @@ async def test_record_halt_never_overwrites_an_operator_halt() -> None:
     halts = await active_halts(now=MONDAY_UTC)
     assert halts["SWING"].set_by == SET_BY_OPERATOR
     assert halts["SWING"].profit_factor is None
+
+
+async def test_an_expired_operator_halt_stops_suppressing_automatic_halts() -> None:
+    """An operator hold is time-boxed by its own --sessions. Once it stops
+    gating entries it must also stop outranking the criterion, or one temporary
+    hold would disable the bucket's automatic protection forever."""
+    await init_db()
+    await record_halt("SWING", profit_factor=None, n_closed=None, set_by=SET_BY_OPERATOR, sessions=1, now=MONDAY_UTC)
+
+    after = datetime(2026, 9, 15, 14, 0, tzinfo=UTC)
+    assert await get_active_halt("SWING", now=after) is None  # the hold has lapsed
+
+    write = await record_halt("SWING", profit_factor=0.1, n_closed=90, now=after)
+
+    assert write.outcome == "written"
+    assert (await active_halts(now=after))["SWING"].set_by == SET_BY_MEASUREMENT
+
+
+async def test_an_operator_set_losing_the_insert_race_still_takes_ownership() -> None:
+    """Two writers can both see no row. The loser retries against the row the
+    winner committed rather than reporting a guessed outcome."""
+    await init_db()
+    real_db_write = bucket_halt.db_write
+    calls = {"n": 0}
+
+    async def flaky_db_write(fn):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            # The nightly pass commits its row inside our lost race.
+            await real_db_write(fn)
+            raise IntegrityError("insert", {}, Exception("duplicate key"))
+        return await real_db_write(fn)
+
+    with patch.object(bucket_halt, "db_write", flaky_db_write):
+        write = await record_halt(
+            "SWING", profit_factor=None, n_closed=None, set_by=SET_BY_OPERATOR, reason="hold", now=MONDAY_UTC
+        )
+
+    assert write.outcome == "written"
+    assert (await active_halts(now=MONDAY_UTC))["SWING"].set_by == SET_BY_OPERATOR
 
 
 # ── Expiry ───────────────────────────────────────────────────────────────
@@ -109,8 +151,12 @@ async def test_release_expired_halts_frees_measurement_rows_only() -> None:
     after = datetime(2026, 9, 15, 14, 0, tzinfo=UTC)
     released = await release_expired_halts(now=after)
 
+    # SWING stops gating and starts sampling; the operator's row is untouched.
     assert [h.bucket for h in released] == ["SWING"]
-    assert {h.bucket for h in await list_halts()} == {"0DTE"}
+    assert await get_active_halt("SWING", now=after) is None
+    rows = {h.bucket: h for h in await list_halts()}
+    assert rows["SWING"].status == RESUMED_STATUS
+    assert rows["0DTE"].status == HALT_STATUS and rows["0DTE"].set_by == SET_BY_OPERATOR
 
 
 async def test_release_expired_halts_leaves_a_live_halt_alone() -> None:
@@ -119,6 +165,53 @@ async def test_release_expired_halts_leaves_a_live_halt_alone() -> None:
 
     assert await release_expired_halts(now=datetime(2026, 8, 20, 14, 0, tzinfo=UTC)) == []
     assert {h.bucket for h in await list_halts()} == {"SWING"}
+
+
+async def test_a_released_bucket_cannot_be_rehalted_during_its_sampling_window() -> None:
+    """The point of the time-box. A halted bucket takes no entries, so on the
+    night its window lapses the trailing fifty are the same losing fifty — and
+    re-halting on them would make the release theatre."""
+    await init_db()
+    await record_halt("SWING", profit_factor=0.4, n_closed=60, now=MONDAY_UTC)
+
+    after = datetime(2026, 9, 15, 14, 0, tzinfo=UTC)
+    resumed = await release_expired_halts(now=after)
+    write = await record_halt("SWING", profit_factor=0.4, n_closed=60, now=after)
+
+    assert write.outcome == "resuming"
+    assert await get_active_halt("SWING", now=after) is None
+    assert resumed[0].expires_after_session == sessions_forward(last_closed_trading_date(after), 10)
+
+
+async def test_the_criterion_can_halt_again_once_the_sampling_window_lapses() -> None:
+    await init_db()
+    await record_halt("SWING", profit_factor=0.4, n_closed=60, now=MONDAY_UTC)
+    await release_expired_halts(now=datetime(2026, 9, 15, 14, 0, tzinfo=UTC))
+
+    # Well past the sampling window: the marker is cleared, then the bucket is
+    # eligible for the criterion again.
+    much_later = datetime(2026, 11, 2, 14, 0, tzinfo=UTC)
+    assert await release_expired_halts(now=much_later) == []
+    assert await list_halts() == []
+
+    write = await record_halt("SWING", profit_factor=0.4, n_closed=60, now=much_later)
+    assert write.outcome == "written"
+    assert await get_active_halt("SWING", now=much_later) is not None
+
+
+async def test_an_operator_set_overrides_a_sampling_window() -> None:
+    """An operator instruction is never held off by the cool-down."""
+    await init_db()
+    await record_halt("SWING", profit_factor=0.4, n_closed=60, now=MONDAY_UTC)
+    after = datetime(2026, 9, 15, 14, 0, tzinfo=UTC)
+    await release_expired_halts(now=after)
+
+    write = await record_halt(
+        "SWING", profit_factor=None, n_closed=None, set_by=SET_BY_OPERATOR, reason="hold", now=after
+    )
+
+    assert write.outcome == "written"
+    assert (await active_halts(now=after))["SWING"].set_by == SET_BY_OPERATOR
 
 
 # ── Gate read: cache and fail-open ───────────────────────────────────────

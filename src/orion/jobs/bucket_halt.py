@@ -13,17 +13,24 @@ Deliberate scope, in both directions:
   strand the positions that made it losing.
 * TIME-BOXED. A halt expires after ten trading sessions and the nightly pass
   releases it, because a permanently halted bucket can never generate the
-  trades that would prove it recovered. If the criterion still fires on the
-  night the window lapses, the bucket is halted again for another window — the
-  rolling 30-day measurement window is what eventually clears it, as the losing
-  sample ages out and the trailing window no longer fills.
+  trades that would prove it recovered. Release converts the row to a RESUMED
+  marker that runs for an equal number of sessions, during which the criterion
+  may not re-arm the halt. Without that, release would be theatre: a halted
+  bucket takes no new entries, so on the night its window lapses the trailing
+  fifty closed trades are still the same losing fifty, and the very same pass
+  would halt it again — a permanent halt wearing a time-box. The verdict is
+  still alerted throughout the resume window; only the automatic action waits.
 * NOT A KILL SWITCH. Every read failure fails toward the pre-existing
   behaviour (trade), never toward a silent halt. The circuit breaker, the
   daily-loss limit and the drawdown kill switch remain the hard, independent
   stops; this gate only removes one bucket from the entry menu and composes
   additively with them.
 
-Operator control (an operator halt is never auto-expired or overwritten):
+Operator control. A live operator halt outranks everything here: the nightly
+pass neither releases nor overwrites it. It is still time-boxed by its own
+``--sessions``, and once that window lapses it stops gating entries and stops
+outranking the automatic halt — otherwise a single temporary operator hold
+would suppress the bucket's automatic protection forever.
 
     DB_URL="postgresql+asyncpg://…@localhost:5440/orion_db" \\
       uv run python -m orion.jobs.bucket_halt --list
@@ -54,7 +61,12 @@ logger = setup_struct_logger("orion.jobs.bucket_halt")
 
 HALT_KEY_PREFIX = "bucket_halt:"
 HALT_STATUS = "HALTED"
+# A released bucket keeps its row, flipped to this status, for the length of
+# its sampling window. It never gates an entry; it only holds the automatic
+# criterion off long enough for fresh trades to reach the measurement window.
+RESUMED_STATUS = "RESUMED"
 DEFAULT_HALT_SESSIONS = 10
+RESUME_SAMPLING_SESSIONS = DEFAULT_HALT_SESSIONS
 SET_BY_MEASUREMENT = "bucket_metrics"
 SET_BY_OPERATOR = "operator"
 
@@ -71,11 +83,12 @@ _cached_at: float = 0.0
 
 @dataclass(frozen=True)
 class BucketHalt:
-    """One parsed ``bucket_halt:<BUCKET>`` row."""
+    """One parsed ``bucket_halt:<BUCKET>`` row, HALTED or RESUMED."""
 
     bucket: str
     expires_after_session: date
     set_by: str
+    status: str = HALT_STATUS
     profit_factor: float | None = None
     n_closed: int | None = None
     reason: str | None = None
@@ -83,12 +96,16 @@ class BucketHalt:
     def is_expired(self, now: datetime | None = None) -> bool:
         """True once the current trading date has moved past the window.
 
-        The halt is in force *through* ``expires_after_session``; a window
-        opened after Friday's close therefore covers the next ten sessions and
-        releases on the eleventh.
+        The window is in force *through* ``expires_after_session``; one opened
+        after Friday's close therefore covers the next ten sessions and lapses
+        on the eleventh.
         """
         current, _session = derive_trading_date_and_session(now or datetime.now(UTC))
         return current > self.expires_after_session
+
+    def gates_entries(self, now: datetime | None = None) -> bool:
+        """Only a live HALTED row stops an entry. A RESUMED marker never does."""
+        return self.status == HALT_STATUS and not self.is_expired(now)
 
     def describe(self) -> str:
         pf = f"{self.profit_factor:.2f}" if self.profit_factor is not None else "n/a"
@@ -98,7 +115,13 @@ class BucketHalt:
 
 @dataclass(frozen=True)
 class HaltWrite:
-    """Outcome of a halt write: ``written``, ``already_halted`` or ``operator_halt_present``."""
+    """Outcome of a halt write.
+
+    ``written`` — the halt is now in force.
+    ``already_halted`` — a live halt was already there and was left untouched.
+    ``operator_halt_present`` — a live operator halt outranks the automatic one.
+    ``resuming`` — the bucket is inside its post-halt sampling window.
+    """
 
     outcome: str
     halt: BucketHalt | None
@@ -142,33 +165,35 @@ def _parse(row: SystemStatus) -> BucketHalt | None:
         bucket=bucket,
         expires_after_session=expires,
         set_by=str(payload.get("set_by") or SET_BY_MEASUREMENT),
+        status=row.status,
         profit_factor=payload.get("pf"),
         n_closed=payload.get("n"),
         reason=payload.get("reason"),
     )
 
 
+def _select_halt_rows() -> Any:
+    return select(SystemStatus).where(SystemStatus.key.like(f"{HALT_KEY_PREFIX}%"))
+
+
 async def _load_halts() -> dict[str, BucketHalt]:
-    """Every readable halt row, regardless of expiry, keyed by bucket."""
+    """Every readable halt/resume row, regardless of expiry, keyed by bucket."""
 
     async def read(session: Any) -> list[SystemStatus]:
-        stmt = select(SystemStatus).where(
-            SystemStatus.key.like(f"{HALT_KEY_PREFIX}%"), SystemStatus.status == HALT_STATUS
-        )
-        return list((await session.execute(stmt)).scalars().all())
+        return list((await session.execute(_select_halt_rows())).scalars().all())
 
     parsed = (_parse(row) for row in await db_query(read))
     return {halt.bucket: halt for halt in parsed if halt is not None}
 
 
 async def list_halts() -> list[BucketHalt]:
-    """All halt rows, expired ones included (operator view)."""
+    """Every halt/resume row, expired ones included (operator view)."""
     return sorted((await _load_halts()).values(), key=lambda h: h.bucket)
 
 
 async def active_halts(*, now: datetime | None = None) -> dict[str, BucketHalt]:
-    """Unexpired halt rows, keyed by bucket. Reads the DB, not the cache."""
-    return {bucket: halt for bucket, halt in (await _load_halts()).items() if not halt.is_expired(now)}
+    """The halts currently blocking entries, keyed by bucket. Reads the DB."""
+    return {bucket: halt for bucket, halt in (await _load_halts()).items() if halt.gates_entries(now)}
 
 
 def reset_halt_cache() -> None:
@@ -202,9 +227,7 @@ async def get_active_halt(bucket: str, *, now: datetime | None = None) -> Bucket
         _cached_at = _monotonic()
 
     halt = _cached_rows.get(normalize_bucket(bucket))
-    if halt is None or halt.is_expired(now):
-        return None
-    return halt
+    return halt if halt is not None and halt.gates_entries(now) else None
 
 
 async def record_halt(
@@ -219,9 +242,18 @@ async def record_halt(
 ) -> HaltWrite:
     """Open a halt window for ``bucket``, idempotently.
 
-    An existing unexpired halt is left exactly as it is — re-running the
-    nightly pass must not roll the expiry forward, or the window would never
-    end. An operator halt is never touched at all: only an operator clears it.
+    Three things are left alone by an automatic write, and only by an automatic
+    write — an operator ``--set`` is an explicit instruction and overrides all
+    of them:
+
+    * a live halt, whatever opened it: re-running the nightly pass must not
+      roll the expiry forward, or the window would never end;
+    * a live *operator* halt, which outranks the criterion outright;
+    * a live RESUMED marker, the sampling window a released bucket is owed.
+
+    Expiry is what makes an operator halt an instruction rather than a
+    permanent veto: once its own ``--sessions`` window lapses it stops gating
+    entries, and it stops outranking the automatic halt at the same moment.
 
     The window is anchored on the most recently closed session, so a pass that
     fires after Friday's close halts the next ``sessions`` sessions.
@@ -231,19 +263,23 @@ async def record_halt(
         bucket=normalize_bucket(bucket),
         expires_after_session=sessions_forward(last_closed_trading_date(ts), sessions),
         set_by=set_by,
+        status=HALT_STATUS,
         profit_factor=profit_factor,
         n_closed=n_closed,
         reason=reason,
     )
+    operator_write = set_by == SET_BY_OPERATOR
 
     async def write(session: Any) -> HaltWrite:
-        stmt = select(SystemStatus).where(SystemStatus.key == halt_key(bucket))
+        stmt = select(SystemStatus).where(SystemStatus.key == halt_key(bucket)).with_for_update()
         row = (await session.execute(stmt)).scalars().first()
         if row is not None:
             existing = _parse(row)
-            if existing is not None and existing.set_by == SET_BY_OPERATOR and set_by != SET_BY_OPERATOR:
-                return HaltWrite("operator_halt_present", existing)
-            if existing is not None and not existing.is_expired(ts) and set_by != SET_BY_OPERATOR:
+            if existing is not None and not operator_write and not existing.is_expired(ts):
+                if existing.status == RESUMED_STATUS:
+                    return HaltWrite("resuming", existing)
+                if existing.set_by == SET_BY_OPERATOR:
+                    return HaltWrite("operator_halt_present", existing)
                 return HaltWrite("already_halted", existing)
             row.status = HALT_STATUS
             row.details = _details(halt)
@@ -256,9 +292,12 @@ async def record_halt(
     try:
         write_result: HaltWrite = await db_write(write)
     except IntegrityError:
-        # Another writer inserted the same key concurrently. Losing that race
-        # is indistinguishable from finding the halt already in place.
-        return HaltWrite("already_halted", None)
+        # Another writer inserted this key between our SELECT and INSERT. Retry
+        # against the row it committed rather than guessing an outcome: an
+        # operator write must still take ownership of a row the nightly pass
+        # won the race to create, and an automatic one must report what is
+        # really there.
+        write_result = await db_write(write)
 
     if write_result.outcome == "written":
         logger.warning(
@@ -287,19 +326,57 @@ async def remove_halt(bucket: str) -> bool:
 
 
 async def release_expired_halts(*, now: datetime | None = None) -> list[BucketHalt]:
-    """Delete halts whose session window has passed. Operator rows are kept.
+    """Advance every lapsed window one step. Returns the buckets set resuming.
 
-    Releasing is what makes the halt a time-box rather than a death sentence:
-    the bucket resumes sampling, and the next nightly pass re-halts it only if
-    the criterion still fires on fresh data.
+    An automatic halt past its window becomes a RESUMED marker running for
+    ``RESUME_SAMPLING_SESSIONS``: the bucket takes entries again, and the
+    criterion may not re-arm until that marker itself lapses. Without the
+    marker the release would be undone by the same nightly pass, since a
+    halted bucket closes no new trades and its trailing fifty are unchanged.
+
+    A lapsed RESUMED marker is deleted — the bucket is fully re-eligible.
+    Operator halts are never released here; they are the operator's to clear.
+
+    Selection and mutation share one transaction, with the rows locked, so a
+    concurrent operator ``--set`` cannot be read as expired and then deleted.
     """
-    expired = [
-        halt for halt in (await _load_halts()).values() if halt.set_by != SET_BY_OPERATOR and halt.is_expired(now)
-    ]
-    for halt in expired:
-        await remove_halt(halt.bucket)
-        logger.warning("bucket_halt_released", bucket=halt.bucket, expired_after=halt.expires_after_session.isoformat())
-    return sorted(expired, key=lambda h: h.bucket)
+    ts = now or datetime.now(UTC)
+
+    async def work(session: Any) -> list[BucketHalt]:
+        rows = list((await session.execute(_select_halt_rows().with_for_update())).scalars().all())
+        resumed: list[BucketHalt] = []
+        for row in rows:
+            halt = _parse(row)
+            if halt is None or not halt.is_expired(ts):
+                continue
+            if halt.status == RESUMED_STATUS:
+                await session.delete(row)
+                logger.info("bucket_resume_window_closed", bucket=halt.bucket)
+                continue
+            if halt.set_by == SET_BY_OPERATOR:
+                continue
+            marker = BucketHalt(
+                bucket=halt.bucket,
+                expires_after_session=sessions_forward(last_closed_trading_date(ts), RESUME_SAMPLING_SESSIONS),
+                set_by=halt.set_by,
+                status=RESUMED_STATUS,
+                profit_factor=halt.profit_factor,
+                n_closed=halt.n_closed,
+                reason=f"sampling window after a halt that ran to {halt.expires_after_session.isoformat()}",
+            )
+            row.status = RESUMED_STATUS
+            row.details = _details(marker)
+            row.last_updated_utc = datetime.now(UTC)
+            resumed.append(marker)
+            logger.warning(
+                "bucket_halt_released",
+                bucket=halt.bucket,
+                halted_through=halt.expires_after_session.isoformat(),
+                sampling_through=marker.expires_after_session.isoformat(),
+            )
+        return sorted(resumed, key=lambda h: h.bucket)
+
+    return await db_write(work)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -311,8 +388,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bucket", help="bucket name, e.g. SWING (required for --set / --clear)")
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--set", action="store_true", help="open an operator halt on the bucket")
-    action.add_argument("--clear", action="store_true", help="remove the bucket's halt row")
-    action.add_argument("--list", action="store_true", help="show every halt row and whether it is live")
+    action.add_argument("--clear", action="store_true", help="remove the bucket's halt or resume row")
+    action.add_argument("--list", action="store_true", help="show every halt / resume row and its state")
     parser.add_argument("--sessions", type=int, default=DEFAULT_HALT_SESSIONS, help="halt length in trading sessions")
     parser.add_argument("--reason", default=None, help="free-text note stored on the halt row")
     return parser
@@ -330,8 +407,11 @@ async def run_cli(argv: list[str] | None = None) -> int:
             print("no bucket halts")  # noqa: T201
             return 0
         for halt in halts:
-            state = "EXPIRED" if halt.is_expired() else "LIVE"
-            print(f"{state:<8} {halt.describe()}  set_by={halt.set_by} reason={halt.reason}")  # noqa: T201
+            if halt.is_expired():
+                state = "EXPIRED"
+            else:
+                state = "HALTED" if halt.status == HALT_STATUS else "SAMPLING"
+            print(f"{state:<9} {halt.describe()}  set_by={halt.set_by} reason={halt.reason}")  # noqa: T201
         return 0
 
     if args.clear:

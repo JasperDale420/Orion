@@ -199,12 +199,15 @@ def _format_summary(metrics: dict[str, Any]) -> str:
 async def apply_halt_verdicts(metrics: dict[str, Any], *, now: datetime | None = None) -> list[str]:
     """Turn ``consider_halting`` verdicts into durable per-bucket entry halts.
 
-    Releases lapsed halts first, so a bucket that has served its window resumes
-    sampling before this pass re-measures it; a bucket that is still failing on
-    fresh data is simply halted again. Returns one human-readable line per
-    action taken, for the nightly alert.
+    Releases lapsed halts first, so a bucket that has served its window starts
+    its sampling window before this pass re-measures it. A bucket that is still
+    failing after that window is simply halted again. Returns one
+    human-readable line per action taken, for the nightly alert.
     """
-    actions = [f"resumed {halt.bucket} (halt window elapsed)" for halt in await release_expired_halts(now=now)]
+    actions = [
+        f"resumed {halt.bucket} — sampling until {halt.expires_after_session.isoformat()}"
+        for halt in await release_expired_halts(now=now)
+    ]
 
     for bucket, stats in metrics["by_bucket"].items():
         # The same criterion GroupStats.summary applies, restated so a caller
@@ -218,12 +221,17 @@ async def apply_halt_verdicts(metrics: dict[str, Any], *, now: datetime | None =
             now=now,
             reason=f"trailing-{HALT_TRAILING_WINDOW} PF below {HALT_TRAILING_PROFIT_FACTOR}",
         )
+        # Never silent about a halt the criterion asked for but did not get:
+        # each of these is something the operator has to be able to see.
         if write.outcome == "written" and write.halt is not None:
             actions.append(f"HALTED {write.halt.describe()}")
         elif write.outcome == "operator_halt_present":
-            # Never silent: an operator row suppressing an automatic halt is
-            # something the operator has to see, not something to swallow.
-            actions.append(f"{bucket} halt suppressed by an operator halt — clear it to re-arm the automatic one")
+            actions.append(f"{bucket} halt suppressed by a live operator halt — clear it to re-arm the automatic one")
+        elif write.outcome == "resuming" and write.halt is not None:
+            actions.append(
+                f"{bucket} still failing but sampling until "
+                f"{write.halt.expires_after_session.isoformat()} — no new halt yet"
+            )
     return actions
 
 

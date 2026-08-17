@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from orion.jobs.bucket_halt import SET_BY_OPERATOR, active_halts, list_halts, record_halt
+from orion.jobs.bucket_halt import RESUMED_STATUS, SET_BY_OPERATOR, active_halts, list_halts, record_halt
 from orion.jobs.bucket_metrics import (
     HALT_TRAILING_WINDOW,
     GroupStats,
@@ -320,9 +320,28 @@ async def test_nightly_pass_releases_an_expired_halt():
     ):
         await run_bucket_metrics()
 
-    # The ROW is gone, not merely inactive: a lingering row would keep the
-    # bucket's automatic halt suppressed forever.
-    assert await list_halts() == []
+    # The bucket stops gating and starts its sampling window.
+    assert await active_halts() == {}
+    assert [(h.bucket, h.status) for h in await list_halts()] == [("POSITION", RESUMED_STATUS)]
+
+
+@pytest.mark.asyncio
+async def test_a_released_bucket_is_not_rehalted_by_the_same_nightly_pass():
+    """A halted bucket closes no new trades, so the trailing fifty that halted
+    it are unchanged the night its window lapses. Re-halting on them would make
+    the ten-session time-box a permanent halt in disguise."""
+    await init_db()
+    stale = datetime.now(UTC) - timedelta(days=120)
+    await record_halt("SWING", profit_factor=0.5, n_closed=100, now=stale)
+
+    with (
+        patch("orion.jobs.bucket_metrics.compute_bucket_metrics", AsyncMock(return_value=_halting_metrics())),
+        patch("orion.shared.alerts.send_discord_alert", AsyncMock(return_value=True)),
+    ):
+        await run_bucket_metrics()
+
+    assert await active_halts() == {}
+    assert [(h.bucket, h.status) for h in await list_halts()] == [("SWING", RESUMED_STATUS)]
 
 
 @pytest.mark.asyncio
