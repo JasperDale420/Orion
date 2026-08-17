@@ -121,23 +121,6 @@ class MLPreFilter:
 
             ml_score = await scorer.score_enriched(flow_dict)
             ctx.ml_score = ml_score
-            # Use a lower threshold when running heuristic scoring (no trained
-            # models loaded) so that high-conviction heuristic flows can still
-            # reach the solver ensemble.  The heuristic cap (0.55 in live mode)
-            # bounds the upside, so this doesn't open the floodgates.
-            #
-            # NOTE (scope): this still keys off scorer.use_heuristic (whether
-            # ANY bucket has a model loaded at all), unchanged from before.
-            # scoring_mode below is the ACTUAL per-candidate path score()
-            # just took, which can be "heuristic" here even while
-            # use_heuristic reads False (a different bucket has a model, or
-            # this call's inference raised and fell back) — in that case the
-            # heuristic score below is compared against the model threshold,
-            # not HEURISTIC_THRESHOLD. That's a pre-existing threshold-
-            # selection gap, not something this observability-only change
-            # alters; flagged separately rather than changed here.
-            HEURISTIC_THRESHOLD = 0.40
-            ml_threshold = HEURISTIC_THRESHOLD if scorer.use_heuristic else system_settings.ml_prefilter_threshold
             # Explicit, honest state: a stale/unloadable model artifact, a
             # bucket with no model loaded, or a mid-call inference exception
             # all silently drop scoring onto the heuristic fallback with no
@@ -147,6 +130,22 @@ class MLPreFilter:
             # the await above (no intervening await) is race-free even with
             # concurrent candidates sharing the scorer singleton.
             scoring_mode = scorer.last_scoring_mode
+
+            # The threshold has to match the scale of the score it judges.
+            # Heuristic and model scores are calibrated differently, so the
+            # comparison is keyed off this candidate's actual scoring path,
+            # not the global use_heuristic flag (which only means "at least
+            # one DTE bucket has a model loaded" — a SHORT_SWING candidate
+            # can be heuristically scored while SWING has a model, and any
+            # candidate falls back to the heuristic when its inference
+            # raises). Heuristic scores get the lower threshold so that
+            # high-conviction heuristic flows can still reach the solver
+            # ensemble; the heuristic cap (0.55 in live mode) bounds the
+            # upside, so this doesn't open the floodgates.
+            HEURISTIC_THRESHOLD = 0.40
+            ml_threshold = (
+                HEURISTIC_THRESHOLD if scoring_mode == "heuristic" else system_settings.ml_prefilter_threshold
+            )
 
             if ml_score < ml_threshold:
                 logger.info(

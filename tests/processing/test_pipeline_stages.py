@@ -305,6 +305,75 @@ async def test_ml_prefilter_trace_reads_scorer_last_scoring_mode_not_global_use_
     assert result.trace.get("scoring_mode") == "heuristic"
 
 
+@pytest.mark.asyncio
+async def test_ml_prefilter_applies_heuristic_threshold_to_heuristic_score_under_partial_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial bucket coverage: only SWING has a trained model, so the global
+    ``use_heuristic`` flag reads False, but a SHORT_SWING candidate is still
+    scored by the heuristic fallback. A heuristic score must be compared
+    against the heuristic threshold (0.40), not the model-calibrated one —
+    0.45 clears 0.40 and fails 0.5, so the two thresholds are distinguishable.
+    """
+    monkeypatch.setattr(
+        "orion.processing.stages.ml_prefilter.system_settings.ml_prefilter_threshold", 0.5, raising=False
+    )
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False  # SWING has a model, so the global flag says "model"
+    mock_scorer.last_scoring_mode = "heuristic"  # ...but THIS candidate's bucket has none
+    mock_scorer.score_enriched = AsyncMock(return_value=0.45)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("threshold") == 0.40
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_keeps_model_threshold_for_model_scored_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The converse guard: a genuine model score is still held to the
+    configured (stricter) threshold — the heuristic threshold must not leak
+    onto model-scored candidates and loosen admission."""
+    monkeypatch.setattr(
+        "orion.processing.stages.ml_prefilter.system_settings.ml_prefilter_threshold", 0.5, raising=False
+    )
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False
+    mock_scorer.last_scoring_mode = "model"
+    mock_scorer.score_enriched = AsyncMock(return_value=0.45)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "SKIP"
+    assert result.trace.get("threshold") == 0.5
+
+
 def test_build_payload_dte_uses_calendar_days_not_wall_clock_hours():
     """DTE must be calendar-day arithmetic — ``expiration_date.date() -
     timestamp_utc.date()`` — matching ``count_open_journal_positions`` in
