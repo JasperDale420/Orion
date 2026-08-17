@@ -39,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - **Retired-service liveness suppression is no longer a permanent hide**: `meta_search`/`meta_weekly` rows are ignored only through their exact 2026-07-02T07:32:50Z retirement-commit cutoff, judged off each row's `updated_at` rather than its last successful cycle. If either name is ever redeployed — even a startup that fails before its first success — the watchdog automatically resumes normal alerting for it from that point on, with no code change needed. A row whose timestamp is corrupted into the future is never treated as reactivation evidence.
 - **The market-open feed CRITICAL can reach Discord**: its stdlib webhook request now sends an explicit User-Agent, fixing the repeated HTTP 403 responses already recorded in `market_open_dataflow_check.stderr.log`.
 
+### Removed
+
+- **Three unused Heber read helpers in `heber_context.py`**: `get_latest_greek_exposure()`, `get_latest_max_pain()`, and `get_latest_iv_rank()` had zero callers anywhere in the codebase (and no dedicated tests) — nothing ever read the greek-exposure/max-pain/IV-rank data they fetched. Their module-level in-memory caches (`_latest_greek_exposure`, `_latest_max_pain`, `_latest_iv_rank`) went with them, since nothing else read those either. `HeberReader.read_greek_exposure/read_max_pain/read_iv_rank` (used elsewhere, e.g. the labeler) and the live-trading UW connectors under `connectors/` are untouched.
+
 ### Changed
 
 - **Routine Discord reports are log-only**: nightly bucket metrics page only for `consider_halting` / `consider_sizing_up`, and daily flow-push shadow parity pages only on RED. All computed detail remains in structured logs; trading/risk, broker-truth, feed-down, unprotected-position, and recovery alerts remain enabled.
