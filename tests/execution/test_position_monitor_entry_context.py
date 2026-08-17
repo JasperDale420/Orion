@@ -350,7 +350,8 @@ async def test_entry_context_timeout_derives_bucket_from_occ_and_does_not_cache(
     0DTE included — ran SWING exit parameters for the life of the process
     because the timeout fallback was cached. The contract symbol carries the
     expiry, so the bucket and expiry are derivable without the database, and
-    the real context must be retried on the next cycle rather than cached.
+    the real context must stay resolvable rather than being frozen at the
+    fallback.
     """
     monitor = PositionMonitor()
     monitor._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 0.01
@@ -375,10 +376,16 @@ async def test_entry_context_timeout_derives_bucket_from_occ_and_does_not_cache(
     assert pos.expiry_date == _expiry_from_occ_symbol(symbol)
     assert symbol not in monitor._entry_context_cache, "timeout fallback must not be cached"
 
-    # Next cycle re-attempts the fetch instead of reusing the fallback.
+    # The next cycle joins the in-flight resolution rather than launching a
+    # second one. Re-running the fetch every cycle is what drove the
+    # 2026-08-17 incident (714 repeats of an 80s scan cascade in one session).
     await monitor.sync_positions(_one_position_connector(symbol))
 
-    assert attempts == [symbol, symbol]
+    assert attempts == [symbol]
+    assert pos.bucket == "0DTE", "position must keep the contract-derived bucket while unresolved"
+    assert symbol not in monitor._entry_context_cache
+
+    monitor._discard_entry_context(symbol)
 
 
 @pytest.mark.asyncio
@@ -405,8 +412,9 @@ async def test_entry_context_arriving_after_timeout_is_applied_to_tracked_positi
     async def _slow_then_ok(sym: str) -> dict:
         nonlocal calls
         calls += 1
-        if calls == 1:
-            await asyncio.sleep(5)
+        # Overruns the cycle budget, so the first cycle falls back to the
+        # contract-derived bucket while resolution continues in the background.
+        await asyncio.sleep(0.2)
         monitor._entry_context_cache[sym] = real_context
         return real_context
 
@@ -416,6 +424,9 @@ async def test_entry_context_arriving_after_timeout_is_applied_to_tracked_positi
     assert pos.bucket == "0DTE"
     assert pos.decision_id is None
     assert pos.max_return_pct == pytest.approx(30.0)
+
+    # The overrunning resolution is not cancelled — it completes and caches.
+    await asyncio.gather(*list(monitor._entry_context_tasks.values()))
 
     (same_pos,) = await monitor.sync_positions(_one_position_connector(symbol, unrealized_plpc=0.10))
 
@@ -427,3 +438,5 @@ async def test_entry_context_arriving_after_timeout_is_applied_to_tracked_positi
     assert pos.expiry_date == _expiry_from_occ_symbol(symbol)
     # Running envelope survives the late context.
     assert pos.max_return_pct == pytest.approx(30.0)
+    # Resolved once, not once per cycle.
+    assert calls == 1
