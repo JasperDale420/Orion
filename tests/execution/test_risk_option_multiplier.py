@@ -12,11 +12,17 @@ equity case that pins the existing behavior.
 """
 
 import pytest
+from datetime import UTC, datetime
 
 from orion.config import RiskSettings
 
 OPTION = "AAPL260708C00312500"  # OCC: AAPL 2026-07-08 $312.50 call
 EQUITY = "AAPL"
+
+
+# A same-day broker timestamp: closing gains credit today's daily figure only
+# when the fill can be placed in the current session.
+_FILLED_AT = datetime.now(UTC)
 
 
 def _order_cfg() -> RiskSettings:
@@ -31,8 +37,8 @@ async def test_option_realized_profit_applies_contract_multiplier(risk_manager_f
     rm.current_daily_loss = 0.0
 
     # Buy 1 contract @ $2.00 premium, sell @ $3.00 => $1.00 x 1 x 100 = $100.
-    await rm.process_fill(OPTION, 1, 2.00, "buy", fill_id="opt_buy_1")
-    await rm.process_fill(OPTION, 1, 3.00, "sell", fill_id="opt_sell_1")
+    await rm.process_fill(OPTION, 1, 2.00, "buy", fill_id="opt_buy_1", filled_at=_FILLED_AT)
+    await rm.process_fill(OPTION, 1, 3.00, "sell", fill_id="opt_sell_1", filled_at=_FILLED_AT)
 
     assert rm.current_equity == pytest.approx(10100.0)
     assert rm.current_daily_loss == pytest.approx(-100.0)
@@ -46,8 +52,8 @@ async def test_option_realized_loss_reaches_kill_switch_at_true_magnitude(risk_m
     rm.current_daily_loss = 0.0
 
     # Buy 2 contracts @ $5.00 ($1,000 premium), sell @ $2.50 => -$500.
-    await rm.process_fill(OPTION, 2, 5.00, "buy", fill_id="opt_buy_2")
-    await rm.process_fill(OPTION, 2, 2.50, "sell", fill_id="opt_sell_2")
+    await rm.process_fill(OPTION, 2, 5.00, "buy", fill_id="opt_buy_2", filled_at=_FILLED_AT)
+    await rm.process_fill(OPTION, 2, 2.50, "sell", fill_id="opt_sell_2", filled_at=_FILLED_AT)
 
     assert rm.current_daily_loss == pytest.approx(500.0)
     assert rm.current_equity == pytest.approx(9500.0)
@@ -60,8 +66,8 @@ async def test_equity_realized_pnl_has_no_multiplier(risk_manager_factory):
     rm.current_equity = 10000.0
     rm.current_daily_loss = 0.0
 
-    await rm.process_fill(EQUITY, 10, 100.0, "buy", fill_id="eq_buy_1")
-    await rm.process_fill(EQUITY, 10, 110.0, "sell", fill_id="eq_sell_1")
+    await rm.process_fill(EQUITY, 10, 100.0, "buy", fill_id="eq_buy_1", filled_at=_FILLED_AT)
+    await rm.process_fill(EQUITY, 10, 110.0, "sell", fill_id="eq_sell_1", filled_at=_FILLED_AT)
 
     assert rm.current_equity == pytest.approx(10100.0)
     assert rm.current_daily_loss == pytest.approx(-100.0)
@@ -74,8 +80,8 @@ async def test_option_short_cover_applies_multiplier(risk_manager_factory):
     rm.current_equity = 10000.0
     rm.current_daily_loss = 0.0
 
-    await rm.process_fill(OPTION, 1, 3.00, "sell", fill_id="opt_short_1")
-    await rm.process_fill(OPTION, 1, 2.00, "buy", fill_id="opt_cover_1")
+    await rm.process_fill(OPTION, 1, 3.00, "sell", fill_id="opt_short_1", filled_at=_FILLED_AT)
+    await rm.process_fill(OPTION, 1, 2.00, "buy", fill_id="opt_cover_1", filled_at=_FILLED_AT)
 
     assert rm.current_equity == pytest.approx(10100.0)
 

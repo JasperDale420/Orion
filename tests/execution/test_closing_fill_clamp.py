@@ -17,6 +17,12 @@ import json
 import logging
 
 import pytest
+from datetime import UTC, datetime
+
+
+# A same-day broker timestamp: closing gains credit today's daily figure only
+# when the fill can be placed in the current session.
+_FILLED_AT = datetime.now(UTC)
 
 
 def _clamp_error_payloads(caplog) -> list[dict]:
@@ -47,7 +53,7 @@ async def test_closing_fill_exceeds_position_clamps_pnl_and_logs(risk_manager_fa
     rm.current_daily_loss = 0.0
 
     # Open long 10 @ 100.
-    await rm.process_fill("AAPL", 10, 100.0, "buy", fill_id="open_1")
+    await rm.process_fill("AAPL", 10, 100.0, "buy", fill_id="open_1", filled_at=_FILLED_AT)
     assert rm.positions["AAPL"]["qty"] == 10
 
     caplog.set_level(logging.ERROR, logger="orion.execution.risk.manager")
@@ -55,7 +61,7 @@ async def test_closing_fill_exceeds_position_clamps_pnl_and_logs(risk_manager_fa
     # A closing fill of 15 @ 110 arrives while only 10 is known (out-of-order
     # partial delivery). PnL must clamp to the known 10 contracts:
     #   (110 - 100) * 10 = 100  — NOT (110 - 100) * 15 = 150.
-    outcome = await rm.process_fill("AAPL", 15, 110.0, "sell", fill_id="oversized_close")
+    outcome = await rm.process_fill("AAPL", 15, 110.0, "sell", fill_id="oversized_close", filled_at=_FILLED_AT)
 
     # PnL clamped to old_qty (10), not the oversized fill qty (15).
     assert outcome.realized_pnl == pytest.approx(100.0)
@@ -78,10 +84,10 @@ async def test_normal_closing_fill_does_not_log_clamp(risk_manager_factory, capl
     rm.current_equity = 10000.0
     rm.current_daily_loss = 0.0
 
-    await rm.process_fill("AAPL", 10, 100.0, "buy", fill_id="open_2")
+    await rm.process_fill("AAPL", 10, 100.0, "buy", fill_id="open_2", filled_at=_FILLED_AT)
 
     caplog.set_level(logging.ERROR, logger="orion.execution.risk.manager")
-    outcome = await rm.process_fill("AAPL", 10, 110.0, "sell", fill_id="full_close")
+    outcome = await rm.process_fill("AAPL", 10, 110.0, "sell", fill_id="full_close", filled_at=_FILLED_AT)
 
     assert outcome.realized_pnl == pytest.approx(100.0)
     assert _clamp_error_payloads(caplog) == [], "normal close must not emit the clamp ERROR"
