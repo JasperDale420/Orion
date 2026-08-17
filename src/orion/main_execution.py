@@ -8,6 +8,7 @@ load_dotenv()
 
 from orion.config import system_settings
 from orion.core.enums import DecisionAction, DecisionStatus
+from orion.core.service_lease import ServiceLeaseLostError
 from orion.execution.execution_engine import ExecutionEngine
 from orion.execution.flow_helpers import (
     _scope_recent_flow_for_position,
@@ -239,6 +240,14 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
             # heartbeat even when decisioning/preflight/persistence then failed).
             await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
 
+        except ServiceLeaseLostError:
+            # Another live instance owns the `execution` lease (poll_fills
+            # renews it every iteration). The engine's in-memory order and
+            # fill state assumes one process, so stop rather than log and
+            # continue: exit non-zero and let launchd relaunch, which
+            # re-acquires only if the lease is genuinely free.
+            shutdown_event.set()
+            raise
         except Exception as e:
             logger.error(f"Main Loop Error: {e}")
             # Error-only liveness: records last_error but does NOT advance

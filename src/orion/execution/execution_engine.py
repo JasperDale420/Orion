@@ -467,13 +467,19 @@ class ExecutionEngine:
     async def renew_service_lease(self) -> None:
         """Refresh the lease's ``last_updated_utc`` so other processes treat it as live.
 
-        No-op if ``acquire_service_lease`` was never called. Errors are
-        logged but do not propagate — a transient DB blip should not
-        abort the main execution loop.
+        No-op if ``acquire_service_lease`` was never called — the position
+        monitor builds an engine without one, and must not start fencing.
+
+        Transient DB errors are logged but do not propagate: a blip should
+        not abort the main execution loop. A CONFIRMED takeover does
+        propagate as ``ServiceLeaseLostError``: the engine's in-memory
+        pending_orders / processed_fill_ids / _partial_fill_tracker /
+        _closing_symbols are the reason the lease exists, so a displaced
+        instance must stop polling fills and submitting orders, not log it.
         """
         if not self._lease_service_id or not self._lease_run_id:
             return
-        await _renew_service_lease(self._lease_service_id, self._lease_run_id)
+        await _renew_service_lease(self._lease_service_id, self._lease_run_id, fence_on_confirmed_loss=True)
 
     def _get_gateway_client(self) -> Any:
         """Lazy-initialize Gateway trading client singleton."""
