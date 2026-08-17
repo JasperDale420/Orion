@@ -286,57 +286,91 @@ async def _manager_with_open_long() -> RiskManager:
 # session, whose budget is closed.
 LATE_PRIOR_DAY_FILL_AT = datetime(2026, 8, 13, 19, 59, tzinfo=UTC)
 
+# Fill times that do NOT prove the fill belongs to today's session. A realized
+# gain on any of these must not buy headroom under today's limit; a realized
+# loss on any of them still counts against it (fail-closed).
+OUTSIDE_SESSION_FILL_TIMES = [
+    pytest.param(None, "no_fill_time", id="missing"),
+    pytest.param(datetime(2026, 8, 14, 10, 55), "naive_fill_time", id="naive"),
+    pytest.param(LATE_PRIOR_DAY_FILL_AT, "prior_session", id="prior-day"),
+    pytest.param(FROZEN_NOW + timedelta(days=1), "future_fill_time", id="future-day"),
+    # Same New York date but after the clock: future evidence, not an executed fill.
+    pytest.param(FROZEN_NOW + timedelta(minutes=1), "future_fill_time", id="later-today"),
+]
+
+
+def _outside_session_payloads(caplog) -> list[dict]:
+    out: list[dict] = []
+    for r in caplog.records:
+        try:
+            extra = json.loads(r.getMessage()).get("extra", {})
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if isinstance(extra, dict) and extra.get("event_type") == "RISK_FILL_OUTSIDE_SESSION":
+            out.append(extra)
+    return out
+
 
 @pytest.mark.asyncio
-async def test_late_prior_day_gain_does_not_credit_today(frozen_clock, caplog):
-    """A recovered prior-session GAIN must not buy headroom under today's limit."""
+@pytest.mark.parametrize("filled_at,reason", OUTSIDE_SESSION_FILL_TIMES)
+async def test_gain_outside_current_session_is_not_credited(frozen_clock, caplog, filled_at, reason):
     rm = await _manager_with_open_long()
     caplog.set_level(logging.INFO, logger="orion.execution.risk.manager")
 
-    outcome = await rm.process_fill("AAPL", 10, 150.0, "sell", fill_id="late_gain", filled_at=LATE_PRIOR_DAY_FILL_AT)
+    outcome = await rm.process_fill("AAPL", 10, 150.0, "sell", fill_id="gain", filled_at=filled_at)
 
     assert outcome.realized_pnl == pytest.approx(500.0)
-    assert rm.current_daily_loss == pytest.approx(900.0), "yesterday's gain must not lower today's loss"
+    assert rm.current_daily_loss == pytest.approx(900.0), "a gain of unproven session must not lower today's loss"
     assert rm.current_equity == pytest.approx(100500.0), "equity is cumulative and still books it"
     assert rm._daily_loss_date == TODAY
-    late = [
-        json.loads(r.getMessage())["extra"]
-        for r in caplog.records
-        if '"RISK_LATE_FILL_PRIOR_SESSION"' in r.getMessage()
-    ]
-    assert len(late) == 1
-    assert late[0]["fill_trading_date"] == YESTERDAY.isoformat()
-    assert late[0]["realized_pnl"] == pytest.approx(500.0)
+
+    payloads = _outside_session_payloads(caplog)
+    assert len(payloads) == 1
+    assert payloads[0]["reason"] == reason
+    assert payloads[0]["realized_pnl"] == pytest.approx(500.0)
+    assert payloads[0]["applied_to_daily_loss"] is False
 
 
 @pytest.mark.asyncio
-async def test_late_prior_day_loss_does_not_debit_today(frozen_clock):
-    """Symmetric: a recovered prior-session LOSS belongs to that session's
-    (closed) budget, not today's."""
+@pytest.mark.parametrize("filled_at,reason", OUTSIDE_SESSION_FILL_TIMES)
+async def test_loss_outside_current_session_still_debits_today(frozen_clock, caplog, filled_at, reason):
+    """A newly discovered loss always tightens admission, whatever session it
+    came from — the limit fails closed rather than trusting the timestamp."""
     rm = await _manager_with_open_long()
+    caplog.set_level(logging.INFO, logger="orion.execution.risk.manager")
 
-    outcome = await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="late_loss", filled_at=LATE_PRIOR_DAY_FILL_AT)
+    outcome = await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="loss", filled_at=filled_at)
 
     assert outcome.realized_pnl == pytest.approx(-200.0)
-    assert rm.current_daily_loss == pytest.approx(900.0)
+    assert rm.current_daily_loss == pytest.approx(1100.0)
     assert rm.current_equity == pytest.approx(99800.0)
+    assert rm.check_order("AAPL", 1, 100.0, "buy") is False
+
+    payloads = _outside_session_payloads(caplog)
+    assert len(payloads) == 1
+    assert payloads[0]["reason"] == reason
+    assert payloads[0]["applied_to_daily_loss"] is True
 
 
 @pytest.mark.asyncio
-async def test_same_day_fill_with_timestamp_accumulates(frozen_clock):
+async def test_same_day_gain_with_broker_time_is_credited(frozen_clock, caplog):
+    rm = await _manager_with_open_long()
+    caplog.set_level(logging.INFO, logger="orion.execution.risk.manager")
+
+    await rm.process_fill(
+        "AAPL", 10, 150.0, "sell", fill_id="same_day_gain", filled_at=FROZEN_NOW - timedelta(minutes=5)
+    )
+
+    assert rm.current_daily_loss == pytest.approx(400.0)
+    assert rm.check_order("AAPL", 1, 100.0, "buy") is True
+    assert _outside_session_payloads(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_same_day_loss_with_broker_time_accumulates(frozen_clock):
     rm = await _manager_with_open_long()
 
     await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="same_day", filled_at=FROZEN_NOW - timedelta(minutes=5))
-
-    assert rm.current_daily_loss == pytest.approx(1100.0)
-
-
-@pytest.mark.asyncio
-async def test_fill_without_timestamp_accumulates_into_today(frozen_clock):
-    """Callers that cannot supply a broker time book into the current session."""
-    rm = await _manager_with_open_long()
-
-    await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="no_ts")
 
     assert rm.current_daily_loss == pytest.approx(1100.0)
 
@@ -415,42 +449,3 @@ def test_migration_chains_off_b5():
 
     assert module.revision == "b6_risk_daily_loss_date"
     assert module.down_revision == "b5_risk_accounting_version"
-
-
-# A closing fill whose broker timestamp is missing or lies in the future cannot
-# be placed in any session. Fail closed: it may ADD to today's loss but must
-# never REDUCE it — otherwise an untimestamped winning close could re-admit
-# entries after the daily limit was hit.
-@pytest.mark.asyncio
-async def test_untimestamped_gain_never_credits_today(frozen_clock, caplog):
-    rm = await _manager_with_open_long()
-    caplog.set_level(logging.WARNING, logger="orion.execution.risk.manager")
-
-    outcome = await rm.process_fill("AAPL", 10, 150.0, "sell", fill_id="no_ts_gain", filled_at=None)
-
-    assert outcome.realized_pnl == pytest.approx(500.0)
-    assert rm.current_daily_loss == pytest.approx(900.0), "an untimestamped gain must not buy headroom"
-    assert rm.current_equity == pytest.approx(100500.0)
-    assert any('"RISK_FILL_TIMESTAMP_UNTRUSTED"' in r.getMessage() for r in caplog.records)
-
-
-@pytest.mark.asyncio
-async def test_untimestamped_loss_still_debits_today(frozen_clock):
-    rm = await _manager_with_open_long()
-
-    outcome = await rm.process_fill("AAPL", 10, 80.0, "sell", fill_id="no_ts_loss", filled_at=None)
-
-    assert outcome.realized_pnl == pytest.approx(-200.0)
-    assert rm.current_daily_loss == pytest.approx(1100.0)
-
-
-@pytest.mark.asyncio
-async def test_future_dated_gain_never_credits_today(frozen_clock):
-    rm = await _manager_with_open_long()
-
-    outcome = await rm.process_fill(
-        "AAPL", 10, 150.0, "sell", fill_id="future_gain", filled_at=FROZEN_NOW + timedelta(days=2)
-    )
-
-    assert outcome.realized_pnl == pytest.approx(500.0)
-    assert rm.current_daily_loss == pytest.approx(900.0)

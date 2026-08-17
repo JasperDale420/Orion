@@ -57,8 +57,7 @@ async def test_risk_manager_process_fill_closes_position_profit():
     # Long 10 @ 100
     await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy", fill_id="pnl_4")
 
-    # Sell 5 @ 120 (Profit 20 * 5 = 100). A same-day broker timestamp lets the
-    # gain credit today's daily figure; an untimestamped gain never does.
+    # Sell 5 @ 120 (Profit 20 * 5 = 100)
     await rm.process_fill("AAPL", qty=5.0, price=120.0, side="sell", fill_id="pnl_5", filled_at=datetime.now(UTC))
 
     assert rm.positions["AAPL"]["qty"] == 5.0
