@@ -10,7 +10,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from orion.core.timekeeping import closed_sessions_between, last_closed_trading_date
+from orion.core.timekeeping import closed_sessions_between, last_closed_trading_date, sessions_forward
 
 pytestmark = pytest.mark.unit
 
@@ -73,3 +73,32 @@ def test_intraday_before_close_resolves_the_previous_session():
 def test_just_after_close_resolves_the_same_day():
     """2026-06-09 20:05 UTC == 16:05 EDT, just past Tuesday's close."""
     assert last_closed_trading_date(datetime(2026, 6, 9, 20, 5, tzinfo=UTC)) == date(2026, 6, 9)
+
+
+# `sessions_forward` — windows expressed in trading sessions, used to time-box
+# the per-bucket entry halts.
+
+
+def test_sessions_forward_skips_the_weekend():
+    """Fri 2026-08-14 + 1 session is Monday, not Saturday."""
+    assert sessions_forward(date(2026, 8, 14), 1) == date(2026, 8, 17)
+
+
+def test_sessions_forward_counts_sessions_not_calendar_days():
+    """Ten sessions from a Friday lands two trading weeks out."""
+    assert sessions_forward(date(2026, 8, 14), 10) == date(2026, 8, 28)
+
+
+def test_sessions_forward_from_a_non_session_start():
+    """A Saturday start has no session to exclude; the first one is Monday."""
+    assert sessions_forward(date(2026, 8, 15), 1) == date(2026, 8, 17)
+
+
+def test_sessions_forward_skips_a_holiday():
+    """Thanksgiving 2026 (Thu 11-26) is not a session, so #2 is Mon 11-30."""
+    assert sessions_forward(date(2026, 11, 25), 2) == date(2026, 11, 30)
+
+
+def test_sessions_forward_rejects_a_non_positive_window():
+    with pytest.raises(ValueError):
+        sessions_forward(date(2026, 8, 14), 0)
