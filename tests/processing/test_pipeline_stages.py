@@ -188,6 +188,140 @@ async def test_ml_prefilter_continues_on_scorer_error():
     assert "error" in str(result.trace)
 
 
+@pytest.mark.asyncio
+async def test_ml_prefilter_trace_reports_model_scoring_mode():
+    """When the candidate's bucket has a trained model, the trace must say
+    so explicitly — ``strategy_decisions.decision_trace_json`` needs to
+    distinguish a real model score from the heuristic fallback, not just
+    carry a bare number."""
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False
+    mock_scorer.last_scoring_mode = "model"
+    mock_scorer.score_enriched = AsyncMock(return_value=0.8)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("scoring_mode") == "model"
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_trace_reports_heuristic_scoring_mode():
+    """When no trained model loaded, the trace must say ``heuristic`` — this
+    is the state that went invisible after PR #187 promoted sklearn's
+    InconsistentVersionWarning to a load failure, silently switching every
+    candidate onto the heuristic scorer with no signal in the decision trace."""
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = True
+    mock_scorer.last_scoring_mode = "heuristic"
+    mock_scorer.score_enriched = AsyncMock(return_value=0.5)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("scoring_mode") == "heuristic"
+    assert result.trace.get("threshold") == 0.40  # HEURISTIC_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_skip_trace_also_reports_scoring_mode():
+    """The SKIP branch's trace needs ``scoring_mode`` too — a rejected
+    candidate is exactly the case an operator most wants to audit."""
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = True
+    mock_scorer.last_scoring_mode = "heuristic"
+    mock_scorer.score_enriched = AsyncMock(return_value=0.1)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "SKIP"
+    assert result.trace.get("scoring_mode") == "heuristic"
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_trace_reads_scorer_last_scoring_mode_not_global_use_heuristic():
+    """Regression: models are bucket-specific and inference can fail per
+    call, so a global ``use_heuristic is False`` (SOME bucket has a model,
+    and no exception this run) does not mean THIS candidate was scored by a
+    model. The trace must come from the scorer's actual per-call outcome
+    (``last_scoring_mode``, set by score()/score_enriched() as its last
+    step), not the global flag — using the flag here previously mislabeled
+    a heuristically-scored candidate as ``model``."""
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False  # some OTHER bucket (e.g. SWING) has a model
+    mock_scorer.last_scoring_mode = "heuristic"  # but THIS call fell back (bucket gap or exception)
+    mock_scorer.score_enriched = AsyncMock(return_value=0.6)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.trace.get("scoring_mode") == "heuristic"
+
+
+def test_build_payload_dte_uses_calendar_days_not_wall_clock_hours():
+    """DTE must be calendar-day arithmetic — ``expiration_date.date() -
+    timestamp_utc.date()`` — matching ``count_open_journal_positions`` in
+    ``orion/execution/persistence.py``. The old raw-datetime subtraction
+    truncated a same-evening entry expiring at next midnight to 0 days
+    (dte=0 → bucket 0DTE) even though it's a genuine 1-DTE SHORT_SWING: a
+    Thursday 13:41 UTC candidate expiring Friday 00:00 UTC is 1 calendar
+    day out, not 0."""
+    ts = datetime(2026, 8, 13, 13, 41, tzinfo=UTC)
+    expiry = datetime(2026, 8, 14, 0, 0, tzinfo=UTC)
+    candidate = _make_candidate(timestamp_utc=ts, expiration_date=expiry)
+
+    payload = MLPreFilter._build_payload(candidate)
+
+    assert payload["dte"] == 1
+
+
 # --- SolverEnsemble ---
 
 
