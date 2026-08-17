@@ -10,6 +10,7 @@ exit classifier sees None for all entry-context features.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ import pytest
 
 from orion.execution.position_monitor import (
     PositionMonitor,
+    _expiry_from_occ_symbol,
     _is_occ_option_symbol,
 )
 from orion.storage.db import async_session_factory
@@ -324,3 +326,106 @@ async def test_fetch_entry_context_swing_default_for_non_occ_symbol() -> None:
         ctx = await monitor._fetch_entry_context("TSLA")
 
     assert ctx == {"bucket": "SWING"}
+
+
+def _one_position_connector(symbol: str, unrealized_plpc: float = 0.0) -> SimpleNamespace:
+    return SimpleNamespace(
+        get_all_positions=lambda: [
+            SimpleNamespace(
+                symbol=symbol,
+                current_price=2.0 * (1 + unrealized_plpc),
+                avg_entry_price=2.0,
+                qty=1.0,
+                unrealized_plpc=unrealized_plpc,
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_entry_context_timeout_derives_bucket_from_occ_and_does_not_cache() -> None:
+    """A timed-out entry-context fetch must not freeze the position as SWING.
+
+    July 2026: 85 `entry_context_timeout` events, and every affected contract —
+    0DTE included — ran SWING exit parameters for the life of the process
+    because the timeout fallback was cached. The contract symbol carries the
+    expiry, so the bucket and expiry are derivable without the database, and
+    the real context must be retried on the next cycle rather than cached.
+    """
+    monitor = PositionMonitor()
+    monitor._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 0.01
+    today = datetime.now(UTC).strftime("%y%m%d")
+    symbol = f"SPY{today}C00500000"
+
+    attempts: list[str] = []
+
+    async def _hang(sym: str) -> dict:
+        attempts.append(sym)
+        await asyncio.sleep(5)
+        return {}
+
+    monitor._fetch_entry_context = _hang  # type: ignore[method-assign]
+
+    tracked = await monitor.sync_positions(_one_position_connector(symbol))
+
+    assert attempts == [symbol]
+    assert len(tracked) == 1
+    pos = tracked[0]
+    assert pos.bucket == "0DTE"
+    assert pos.expiry_date == _expiry_from_occ_symbol(symbol)
+    assert symbol not in monitor._entry_context_cache, "timeout fallback must not be cached"
+
+    # Next cycle re-attempts the fetch instead of reusing the fallback.
+    await monitor.sync_positions(_one_position_connector(symbol))
+
+    assert attempts == [symbol, symbol]
+
+
+@pytest.mark.asyncio
+async def test_entry_context_arriving_after_timeout_is_applied_to_tracked_position() -> None:
+    """When the retried fetch succeeds, the already-tracked position picks up the
+    real context (bucket, entry time, decision id) and keeps its running stats."""
+    monitor = PositionMonitor()
+    monitor._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 0.01
+    today = datetime.now(UTC).strftime("%y%m%d")
+    symbol = f"SPY{today}C00500000"
+    real_entry_ts = datetime.now(UTC) - timedelta(hours=3)
+    real_context = {
+        "decision_id": "dec-late",
+        "candidate_id": "cand-late",
+        "option_symbol": symbol,
+        "premium_usd": 1200.0,
+        "dte": 5,
+        "bucket": "SWING",
+        "direction": "LONG",
+        "entry_time": real_entry_ts,
+        "expiry_date": None,
+    }
+    calls = 0
+
+    async def _slow_then_ok(sym: str) -> dict:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.sleep(5)
+        monitor._entry_context_cache[sym] = real_context
+        return real_context
+
+    monitor._fetch_entry_context = _slow_then_ok  # type: ignore[method-assign]
+
+    (pos,) = await monitor.sync_positions(_one_position_connector(symbol, unrealized_plpc=0.30))
+    assert pos.bucket == "0DTE"
+    assert pos.decision_id is None
+    assert pos.max_return_pct == pytest.approx(30.0)
+
+    (same_pos,) = await monitor.sync_positions(_one_position_connector(symbol, unrealized_plpc=0.10))
+
+    assert same_pos is pos
+    assert pos.bucket == "SWING"
+    assert pos.decision_id == "dec-late"
+    assert pos.candidate_id == "cand-late"
+    assert pos.entry_time == real_entry_ts
+    assert pos.premium_usd == 1200.0
+    assert pos.expiry_date == _expiry_from_occ_symbol(symbol)
+    # Running envelope survives the late context.
+    assert pos.max_return_pct == pytest.approx(30.0)

@@ -360,6 +360,7 @@ class TrackedPosition:
 
     # Additional
     decision_id: str | None = None
+    candidate_id: str | None = None  # Entry candidate; links exit_decisions back to the entry
     option_symbol: str | None = None  # For options positions
 
     # Optional — populated by sync_positions when the parent decision/order
@@ -404,6 +405,41 @@ class PositionMonitor:
         # post-entry, so a session-lifetime cache is correct.
         self._entry_context_cache: dict[str, dict[str, Any]] = {}
 
+    # Per-symbol budget for the entry-context join during sync_positions. A
+    # fetch that overruns it is retried next cycle rather than cached.
+    _ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 2.0
+
+    @staticmethod
+    def _apply_entry_context(pos: TrackedPosition, entry_context: dict[str, Any]) -> None:
+        """Populate the fields of `pos` that come from its entry context.
+
+        Runs at construction and again when the context arrives on a later
+        cycle (the first fetch timed out or failed and was deliberately not
+        cached). `entry_time` is only overwritten by a real decision
+        timestamp — a context without one keeps the existing approximation.
+        `expiry_date` falls back to the contract symbol's own encoded expiry:
+        the entry-context join returns a context WITHOUT it on three paths
+        (no matching decision, fetch error, timeout), and a None here disarms
+        the time-stop entirely — the position then rides to expiry and any
+        ITM contract is auto-exercised into equity.
+        """
+        entry_time = entry_context.get("entry_time")
+        if entry_time is not None:
+            pos.entry_time = entry_time
+        pos.bucket = entry_context.get("bucket", "SWING")
+        pos.direction = entry_context.get("direction", "LONG")
+        pos.premium_usd = entry_context.get("premium_usd")
+        pos.dte_at_entry = entry_context.get("dte")
+        pos.is_sweep = entry_context.get("is_sweep", False)
+        pos.iv_rank_at_entry = entry_context.get("iv_rank_at_entry")
+        pos.vix_at_entry = entry_context.get("vix_at_entry")
+        pos.gex_at_entry = entry_context.get("gex_at_entry")
+        pos.market_tide_30m = entry_context.get("market_tide_30m")
+        pos.decision_id = entry_context.get("decision_id")
+        pos.candidate_id = entry_context.get("candidate_id")
+        pos.option_symbol = entry_context.get("option_symbol")
+        pos.expiry_date = entry_context.get("expiry_date") or _expiry_from_occ_symbol(pos.symbol)
+
     async def sync_positions(self, connector: Any) -> list[TrackedPosition]:
         """
         Sync tracked positions with broker positions.
@@ -431,33 +467,39 @@ class PositionMonitor:
             # in the same process doesn't reuse a stale decision_id / context.
             self._entry_context_cache.pop(symbol, None)
 
-        # Pre-fetch entry-context for any newly-appearing symbols in parallel
-        # with a per-call timeout. On a cold container with ~200 positions and
-        # ~200ms per flow_enricher round-trip, doing this sequentially in the
-        # construction loop would block startup for tens of seconds before the
-        # first exit evaluation. Cached symbols short-circuit immediately.
-        new_symbols = [
-            p.symbol
-            for p in broker_positions
-            if p.symbol not in self.tracked_positions and p.symbol not in self._entry_context_cache
-        ]
-        if new_symbols:
+        # Pre-fetch entry-context for every symbol without a cached context,
+        # in parallel with a per-call timeout. On a cold container with ~200
+        # positions and ~200ms per flow_enricher round-trip, doing this
+        # sequentially in the construction loop would block startup for tens
+        # of seconds before the first exit evaluation. This covers new
+        # positions and tracked positions whose earlier fetch timed out or
+        # failed — those are deliberately left uncached so the real context
+        # is retried here instead of frozen at the fallback for the life of
+        # the process (July 2026: 0DTE contracts ran SWING parameters that way).
+        uncached = [p.symbol for p in broker_positions if p.symbol not in self._entry_context_cache]
+        retrying = {s for s in uncached if s in self.tracked_positions}
+        # This cycle's fallback for symbols whose fetch timed out. Local, never
+        # cached: the bucket comes from the contract's own expiry so a 0DTE gets
+        # 0DTE cadence, stops, and flatten even before the join resolves.
+        timed_out: dict[str, dict[str, Any]] = {}
+        if uncached:
 
             async def _bounded_fetch(sym: str) -> None:
                 try:
-                    await asyncio.wait_for(self._fetch_entry_context(sym), timeout=2.0)
-                except TimeoutError:
-                    logger.warning(
-                        f"Entry-context fetch timed out for {sym}; using default context",
-                        extra={"event": "entry_context_timeout", "symbol": sym},
+                    await asyncio.wait_for(
+                        self._fetch_entry_context(sym), timeout=self._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS
                     )
-                    # Cache an empty-context default so the construction loop
-                    # below reads the same fallback and we don't re-hit the
-                    # slow path on the next sync tick.
-                    self._entry_context_cache.setdefault(sym, {"bucket": "SWING"})
+                except TimeoutError:
+                    fallback_bucket = _bucket_from_occ_symbol(sym) or "SWING"
+                    logger.warning(
+                        f"Entry-context fetch timed out for {sym}; using bucket {fallback_bucket} "
+                        f"from the contract symbol this cycle and retrying next cycle",
+                        extra={"event": "entry_context_timeout", "symbol": sym, "bucket": fallback_bucket},
+                    )
+                    timed_out[sym] = {"bucket": fallback_bucket}
 
             await asyncio.gather(
-                *[_bounded_fetch(s) for s in new_symbols],
+                *[_bounded_fetch(s) for s in uncached],
                 return_exceptions=True,
             )
 
@@ -474,6 +516,21 @@ class PositionMonitor:
                 pos = self.tracked_positions[symbol]
                 pos.current_price = current_price
                 pos.unrealized_pnl_pct = unrealized_pnl_pct
+
+                # Entry context that arrived on retry (see the pre-fetch above)
+                # is applied in place, so bucket-specific exits and the real
+                # entry time take effect without disturbing the running envelope.
+                if symbol in retrying and symbol in self._entry_context_cache:
+                    self._apply_entry_context(pos, self._entry_context_cache[symbol])
+                    logger.info(
+                        f"Entry context resolved late for {symbol}: bucket={pos.bucket}",
+                        extra={
+                            "event": "entry_context_resolved_late",
+                            "symbol": symbol,
+                            "bucket": pos.bucket,
+                            "decision_id": pos.decision_id,
+                        },
+                    )
 
                 # Update tracking metrics — record whether we observed a
                 # new peak or trough so we can avoid the DB write on
@@ -501,15 +558,10 @@ class PositionMonitor:
                     )
             else:
                 # New position — context was pre-fetched above and is in
-                # cache (either a real row or a default). _fetch_entry_context
-                # short-circuits on cache hit.
-                entry_context = await self._fetch_entry_context(symbol)
-
-                # Use the real entry timestamp from the decision row when
-                # available — falling back to now() approximated entry_time
-                # for every legacy position after restart, biasing the ML
-                # `time_held_hours` feature toward "hold longer".
-                entry_time = entry_context.get("entry_time") or datetime.now(UTC)
+                # cache (a real row or a default; _fetch_entry_context
+                # short-circuits on cache hit), or is this cycle's uncached
+                # timeout fallback.
+                entry_context = timed_out.get(symbol) or await self._fetch_entry_context(symbol)
 
                 # Phase 3 of exit-pipeline RCA: rehydrate running-window
                 # stats from the durable `position_running_stats` table
@@ -530,34 +582,22 @@ class PositionMonitor:
                     seeded_max = max(0, unrealized_pnl_pct)
                     seeded_drawdown = min(0, unrealized_pnl_pct)
 
+                # entry_time starts as now() and is replaced by the decision
+                # row's real timestamp when the context has one — approximating
+                # every legacy position's entry as "now" after a restart biased
+                # the ML `time_held_hours` feature toward "hold longer".
                 pos = TrackedPosition(
                     symbol=symbol,
                     qty=qty,
                     entry_price=entry_price,
                     current_price=current_price,
                     unrealized_pnl_pct=unrealized_pnl_pct,
-                    entry_time=entry_time,
-                    bucket=entry_context.get("bucket", "SWING"),
-                    direction=entry_context.get("direction", "LONG"),
+                    entry_time=datetime.now(UTC),
+                    bucket="SWING",
                     max_return_pct=seeded_max,
                     max_drawdown_pct=seeded_drawdown,
-                    premium_usd=entry_context.get("premium_usd"),
-                    dte_at_entry=entry_context.get("dte"),
-                    is_sweep=entry_context.get("is_sweep", False),
-                    iv_rank_at_entry=entry_context.get("iv_rank_at_entry"),
-                    vix_at_entry=entry_context.get("vix_at_entry"),
-                    gex_at_entry=entry_context.get("gex_at_entry"),
-                    market_tide_30m=entry_context.get("market_tide_30m"),
-                    decision_id=entry_context.get("decision_id"),
-                    option_symbol=entry_context.get("option_symbol"),
-                    # Fall back to the contract symbol's own encoded expiry.
-                    # The entry-context join returns a context WITHOUT
-                    # expiry_date on three paths (no matching decision, fetch
-                    # error, timeout), and a None here disarms the time-stop
-                    # entirely — the position then rides to expiry and any ITM
-                    # contract is auto-exercised into equity.
-                    expiry_date=entry_context.get("expiry_date") or _expiry_from_occ_symbol(symbol),
                 )
+                self._apply_entry_context(pos, entry_context)
                 self.tracked_positions[symbol] = pos
                 # Initial upsert so the row exists for subsequent
                 # rehydration (e.g. if the container restarts before
@@ -598,8 +638,9 @@ class PositionMonitor:
         prefix to ignore positions opened by other systems on the shared
         Alpaca account). From that decision row we pull:
 
-          - decision_id, entry_time, direction, premium_usd, dte, bucket,
-            option_symbol, expiry_date — all directly queryable from the join.
+          - decision_id, candidate_id, entry_time, direction, premium_usd, dte,
+            bucket, option_symbol, expiry_date — all directly queryable from
+            the join.
           - is_sweep, event_id — extracted from ``candidate_trades.evidence``.
           - iv_rank_at_entry, vix_at_entry, gex_at_entry, market_tide_30m —
             fetched from the same flow_enricher pipeline the ML scorer uses,
@@ -627,6 +668,7 @@ class PositionMonitor:
         query = f"""
             SELECT
                 sd.decision_id,
+                sd.candidate_id,
                 sd.timestamp_utc as decision_ts,
                 ct.ticker,
                 ct.option_symbol,
@@ -809,6 +851,7 @@ class PositionMonitor:
 
         context = {
             "decision_id": row.get("decision_id"),
+            "candidate_id": row.get("candidate_id"),
             "option_symbol": row.get("option_symbol"),
             "premium_usd": premium_usd,
             "dte": dte,
@@ -837,6 +880,12 @@ class PositionMonitor:
         keeps the deterministic safety net in place even when the
         classifier is degraded or returns low-confidence predictions
         (see FOLLOWUPS.md #0).
+
+        The classifier is consulted only for buckets that have a trained
+        exit model loaded. Without one, the per-bucket barriers are the
+        entire exit policy: the classifier's built-in heuristic uses
+        tighter, undocumented thresholds (SWING stop -20% vs the -40%
+        barrier) and would otherwise pre-empt every documented barrier.
         """
         from orion.config import system_settings
         from orion.core.market_schedule import resolve_session_close
@@ -890,10 +939,9 @@ class PositionMonitor:
                 )
                 # Wrap the ExitSignal as ExitPrediction-compatible so the
                 # downstream execute_exits path doesn't need to branch.
-                # ExitPrediction's consumer reads .should_exit, .confidence,
-                # .reasoning, and (optionally) .rule_id.
                 # Duck-typed as ExitPrediction: consumers only read .should_exit,
-                # .confidence, .reasoning, .rule_id (see comment above).
+                # .confidence, .reasoning, and (optionally) .rule_id / .urgency,
+                # which carry the rule's own identity through to exit_decisions.
                 prediction = cast(
                     "ExitPrediction",
                     SimpleNamespace(
@@ -901,9 +949,16 @@ class PositionMonitor:
                         confidence=fallback.confidence,
                         reasoning=fallback.reason,
                         rule_id=fallback.rule_id,
+                        urgency=fallback.urgency,
                     ),
                 )
                 exit_signals.append((pos, prediction))
+                continue
+
+            # No trained exit model for this bucket: the barriers above are
+            # the whole policy, so the classifier (and its heuristic) is
+            # not consulted.
+            if pos.bucket not in self.exit_classifier.models:
                 continue
 
             # ML classifier path — unchanged from before.
@@ -1102,11 +1157,16 @@ class PositionMonitor:
                         # risk manager, and order persistence
                         from types import SimpleNamespace
 
+                        # A fallback rule's prediction carries its own rule_id
+                        # and urgency, which are what exit_decisions records;
+                        # a classifier prediction carries neither and keeps
+                        # the ml_exit label with an immediate close.
                         exit_signal = SimpleNamespace(
-                            rule_id=f"ml_exit_{pos.bucket}",
+                            rule_id=getattr(prediction, "rule_id", None) or f"ml_exit_{pos.bucket}",
                             reason=prediction.reasoning,
-                            urgency="IMMEDIATE",
+                            urgency=getattr(prediction, "urgency", None) or "IMMEDIATE",
                             confidence=prediction.confidence,
+                            candidate_id=pos.candidate_id,
                             details={"bucket": pos.bucket, "pnl_pct": pos.unrealized_pnl_pct},
                         )
 
