@@ -8,6 +8,7 @@ Verifies the contract established in Phase 2 Task 2.3:
 """
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from orion.execution.position_monitor import PositionMonitor, TrackedPosition
 
@@ -89,6 +90,10 @@ def test_fallback_exception_falls_through_to_ml_classifier(monkeypatch, caplog):
     predict_called_for: list[str] = []
 
     class _ClassifierBenign:
+        # A loaded model per bucket — the classifier is only consulted for
+        # buckets that have one.
+        models = {"POSITION": object(), "SWING": object()}
+
         def predict(self, features):
             # Capture the bucket so we can correlate to a position symbol.
             predict_called_for.append(features.bucket)
@@ -186,6 +191,8 @@ def test_fallback_rules_called_once_per_tracked_position(monkeypatch):
     monkeypatch.setattr(efr, "evaluate_fallback_rules", _spy)
 
     class _ClassifierBenign:
+        models = {"SWING": object()}
+
         def predict(self, _features):
             return SimpleNamespace(should_exit=False, confidence=0.0, reasoning="hold")
 
@@ -247,6 +254,8 @@ def test_session_close_resolved_once_and_passed_to_fallback_rules(monkeypatch):
     monkeypatch.setattr(efr, "evaluate_fallback_rules", _spy)
 
     class _ClassifierBenign:
+        models = {"SWING": object()}
+
         def predict(self, _features):
             return SimpleNamespace(should_exit=False, confidence=0.0, reasoning="hold")
 
@@ -260,3 +269,73 @@ def test_session_close_resolved_once_and_passed_to_fallback_rules(monkeypatch):
     assert seen_session_close == [session_close] * 3
     # One calendar lookup per cycle, not per position.
     assert len(resolve_calls) == 1
+
+
+# --- Test 5-7: without a loaded exit model, the barriers ARE the policy -------
+#
+# No `*_exit.pkl` has been deployed since 2026-07-01, so `BucketExitClassifier.predict`
+# always ran its heuristic — whose SWING stop (-20%) is tighter than the
+# documented -40% barrier and therefore always won. July: 9 heuristic stops,
+# 5 of them within 30 minutes of entry on bid/ask noise.
+
+
+class _NoModelClassifier:
+    """The production shape since 2026-07-01: a classifier with nothing loaded."""
+
+    models: dict = {}
+
+    def predict(self, _features):
+        raise AssertionError("classifier MUST NOT be consulted when no exit model is loaded for the bucket")
+
+
+def test_evaluate_exits_no_heuristic_stop_when_no_exit_model():
+    """SWING at -22%: inside the documented -40% stop, so NO exit — the
+    heuristic's -20% stop must not pre-empt the barrier."""
+    monitor = _build_monitor_with_classifier(_NoModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-22.0, bucket="SWING"),
+    }
+
+    assert monitor.evaluate_exits() == []
+
+
+def test_evaluate_exits_deterministic_barrier_still_fires():
+    """Same position at -45%: the documented stop fires, with its own identity."""
+    monitor = _build_monitor_with_classifier(_NoModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-45.0, bucket="SWING"),
+    }
+
+    signals = monitor.evaluate_exits()
+
+    assert len(signals) == 1
+    pos, pred = signals[0]
+    assert pos.symbol == "SWING_POS"
+    assert pred.should_exit is True
+    assert pred.rule_id == "stop_loss_v1"
+    assert pred.urgency == "IMMEDIATE"
+
+
+def test_evaluate_exits_uses_model_when_loaded():
+    """A loaded model for the bucket keeps the classifier in the loop after the
+    barriers pass — the model's verdict is what fires."""
+    predict_called_for: list[str] = []
+
+    class _LoadedModelClassifier:
+        models = {"SWING": object()}
+
+        def predict(self, features):
+            predict_called_for.append(features.bucket)
+            return SimpleNamespace(should_exit=True, confidence=0.9, reasoning="ML exit score: 0.90")
+
+    monitor = _build_monitor_with_classifier(_LoadedModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-22.0, bucket="SWING"),
+        # No model for SHORT_SWING: barriers only, and -22% is inside its -35% stop.
+        "SS_POS": _tracked_position(symbol="SS_POS", return_pct_value=-22.0, bucket="SHORT_SWING"),
+    }
+
+    signals = monitor.evaluate_exits()
+
+    assert predict_called_for == ["SWING"]
+    assert [(pos.symbol, pred.reasoning) for pos, pred in signals] == [("SWING_POS", "ML exit score: 0.90")]

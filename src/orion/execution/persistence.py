@@ -701,6 +701,9 @@ async def persist_exit_decision(ticker: str, exit_signal: Any, client_order_id: 
                 ExitDecision(
                     exit_id=client_order_id,
                     ticker=ticker,
+                    # Present on monitor-originated signals; other close
+                    # callers' signals leave it unset.
+                    candidate_id=getattr(exit_signal, "candidate_id", None),
                     rule_id=exit_signal.rule_id,
                     exit_reason=exit_signal.reason,
                     urgency=exit_signal.urgency,
