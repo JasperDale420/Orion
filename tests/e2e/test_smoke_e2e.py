@@ -18,12 +18,12 @@ import os
 import sys
 import time
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import and_, delete, or_, select, text
+from sqlalchemy import and_, delete, insert, or_, select, text
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -88,18 +88,13 @@ async def _snapshot_runtime_state(session) -> dict[str, object]:
         )
         snapshot["system_status"][key] = dict(row) if row else None
 
-    risk_rows = (
-        (
-            await session.execute(
-                text(
-                    "SELECT id, updated_at_utc, current_daily_loss, current_equity, "
-                    "starting_equity, peak_equity, open_positions_count FROM risk_state"
-                )
-            )
-        )
-        .mappings()
-        .all()
-    )
+    # Select via the model's own table metadata, not an explicit column list,
+    # so a schema change can never again silently drop a column from the
+    # snapshot/restore round-trip (accounting_version and daily_loss_date
+    # were both dropped this way before this fix).
+    from orion.storage.models_risk import RiskState
+
+    risk_rows = (await session.execute(select(RiskState.__table__))).mappings().all()
     snapshot["risk_state"] = [dict(row) for row in risk_rows]
     return snapshot
 
@@ -121,16 +116,14 @@ async def _restore_runtime_state(session, run_tag: str | None, snapshot: dict[st
             },
         )
 
-    await session.execute(text("DELETE FROM risk_state"))
+    # Restore via the model's own table metadata, using each captured row's
+    # own columns for the INSERT, so a schema change can never again silently
+    # drop a column from the restore (see _snapshot_runtime_state above).
+    from orion.storage.models_risk import RiskState
+
+    await session.execute(delete(RiskState.__table__))
     for row in snapshot["risk_state"]:
-        await session.execute(
-            text(
-                "INSERT INTO risk_state "
-                "(id, updated_at_utc, current_daily_loss, current_equity, starting_equity, peak_equity, open_positions_count) "
-                "VALUES (:id, :updated_at_utc, :current_daily_loss, :current_equity, :starting_equity, :peak_equity, :open_positions_count)"
-            ),
-            row,
-        )
+        await session.execute(insert(RiskState.__table__).values(**row))
 
     for key in SMOKE_STATUS_KEYS:
         previous = snapshot["system_status"].get(key)
@@ -760,6 +753,7 @@ def test_live_db_smoke_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> N
     _require_live_db_smoke_enabled()
 
 
+@pytest.mark.integration
 @pytest.mark.asyncio
 async def test_restore_operational_state_restores_system_status_and_risk_rows() -> None:
     from orion.storage.db import async_session_factory
@@ -823,6 +817,54 @@ async def test_restore_operational_state_restores_system_status_and_risk_rows() 
     assert restored_breaker.details == "original breaker"
     assert restored_risk is not None
     assert restored_risk.current_daily_loss == 11.0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_restore_operational_state_round_trips_every_risk_state_column() -> None:
+    """Regression test: the risk_state snapshot/restore used an explicit
+    column list that predated ``accounting_version`` and ``daily_loss_date``,
+    so a restore silently NULLed both — a NULL accounting_version fail-closed
+    blocks all order admission, and a NULL daily_loss_date strips the
+    daily-loss kill switch's session identity. The helpers now capture and
+    restore every column generically, so a future schema addition can never
+    be dropped the same way again.
+    """
+    from orion.storage.db import async_session_factory
+    from orion.storage.models_risk import RiskState
+
+    original_ts = datetime(2026, 4, 2, 20, 0, tzinfo=UTC)
+
+    async with async_session_factory() as session:
+        session.add(
+            RiskState(
+                id="global_risk_v1",
+                updated_at_utc=original_ts,
+                current_daily_loss=11.0,
+                current_equity=100_000.0,
+                starting_equity=100_100.0,
+                peak_equity=100_200.0,
+                open_positions_count=2,
+                accounting_version=3,
+                daily_loss_date=date(2026, 4, 2),
+            )
+        )
+        await session.commit()
+
+        snapshot = await _snapshot_operational_state(session)
+
+        await session.execute(RiskState.__table__.delete())
+        await session.commit()
+
+        await _restore_operational_state(session, snapshot)
+        await session.commit()
+
+    async with async_session_factory() as session:
+        restored = (await session.execute(select(RiskState).where(RiskState.id == "global_risk_v1"))).scalars().first()
+
+    assert restored is not None
+    assert restored.accounting_version == 3
+    assert restored.daily_loss_date == date(2026, 4, 2)
 
 
 # ---------------------------------------------------------------------------
