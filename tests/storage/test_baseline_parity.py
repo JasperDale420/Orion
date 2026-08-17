@@ -138,7 +138,9 @@ def test_baseline_creates_every_metadata_table() -> None:
         },
         # b5_risk_accounting_version.py — provenance for the risk_state money
         # columns (NULL = written before the option contract-multiplier fix).
-        "risk_state": {"accounting_version"},
+        # b6_risk_daily_loss_date.py — trading date the persisted daily loss
+        # belongs to (NULL = written before the column existed).
+        "risk_state": {"accounting_version", "daily_loss_date"},
     }
 
     # Column-level parity (adversarial-review finding: table-name-only parity

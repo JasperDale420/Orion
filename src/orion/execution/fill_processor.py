@@ -6,6 +6,7 @@ from typing import Any
 
 from orion.core.enums import OrderSide
 from orion.execution.persistence import (
+    _coerce_timestamp,
     is_fill_processed,
     mark_fill_processed,
     persist_fill_record,
@@ -93,8 +94,12 @@ class FillProcessor:
                 },
             )
 
+            # The broker's execution time decides which trading session the
+            # realized P&L belongs to — a fill recovered late must not book
+            # into today's daily-loss figure.
+            filled_at = _coerce_timestamp(filled_at_raw)
             fill_outcome = await risk_manager.process_fill(
-                ticker, incremental_qty, filled_avg_price, side, fill_id=fill_marker
+                ticker, incremental_qty, filled_avg_price, side, fill_id=fill_marker, filled_at=filled_at
             )
 
             # Attribute a closing fill back to the originating entry's
@@ -104,7 +109,7 @@ class FillProcessor:
             # the delta its per-order ledger has not seen, so a re-poll of the
             # same order allocates nothing (B2 RCA; 2026-08 OCC/underlying RCA).
             if getattr(fill_outcome, "is_closing", False):
-                from orion.execution.persistence import _coerce_timestamp, allocate_exit_to_journal
+                from orion.execution.persistence import allocate_exit_to_journal
 
                 # The close fill's timestamp must reach exit_filled_at_utc — the
                 # PnL reconciliation buckets journal realizations by EXIT day.
@@ -117,7 +122,7 @@ class FillProcessor:
                         order_id=order_id,
                         order_cum_qty=filled_qty,
                         order_cum_avg_price=filled_avg_price,
-                        filled_at=_coerce_timestamp(filled_at_raw),
+                        filled_at=filled_at,
                         source="live",
                     )
                 except Exception as alloc_exc:
