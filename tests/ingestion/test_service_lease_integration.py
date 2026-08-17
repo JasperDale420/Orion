@@ -144,6 +144,38 @@ async def test_ingestion_heartbeat_renews_lease(monkeypatch) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_overnight_sleep_renews_lease_each_chunk(monkeypatch) -> None:
+    """The market-closed sleep must keep the lease fresh, not just the heartbeat.
+
+    `_check_overnight_sleep` blocks the whole cycle until the next open, so the
+    renewal in `run()`'s loop tail is unreachable all weekend. Observed
+    2026-08-14: `service_lease_ingestion` froze at Friday close while
+    `global_health` stayed fresh, voiding the split-brain guard for ~60 hours
+    (SERVICE_LEASE_STALE_SECONDS is 120). Every 60s sleep chunk must renew.
+    """
+    from unittest.mock import MagicMock
+
+    service = _build_service_with_mocks(monkeypatch)
+    service._lease_run_id = "sleeping-run"
+
+    schedule = MagicMock()
+    schedule.is_market_open.return_value = False
+    schedule.seconds_until_open.return_value = 120.0  # two 60s chunks
+
+    with (
+        patch("orion.core.market_schedule.MarketSchedule", return_value=schedule),
+        patch("orion.ingestion.service.asyncio.sleep", new=AsyncMock()),
+        patch.object(service, "_update_health_status", new=AsyncMock()),
+        patch.object(service, "_maybe_run_eod", new=AsyncMock()),
+        patch.object(service, "_maybe_renew_lease", new=AsyncMock()) as renew,
+    ):
+        await service._check_overnight_sleep()
+
+    assert renew.await_count >= 2, "lease must be renewed on every overnight sleep chunk"
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_ingestion_heartbeat_no_op_without_lease(monkeypatch) -> None:
     """If initialize() never acquired a lease (None run_id), the
     heartbeat helper must not call the renewer (avoids polluting the

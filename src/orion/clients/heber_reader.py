@@ -440,7 +440,14 @@ class HeberReader:
         if instrument_keys:
             filters.append(("instrument_key", "in", instrument_keys))
 
-        df = self._read_parquet(silver_path, filters=filters)
+        # Heber derives each silver dt= partition from the row's UTC ts_event,
+        # so a bounded read only needs partitions on/after start_time's UTC
+        # date. Without this every file in the feed (183k+ for bars, back to
+        # 2024) has its footer opened per call, and the row-level filter below
+        # then throws almost all of it away. Unbounded reads keep full history.
+        min_dt = self._to_utc_timestamp(start_time).date() if start_time is not None else None
+
+        df = self._read_parquet(silver_path, filters=filters, min_dt=min_dt)
         if df.empty:
             return df
 
