@@ -711,6 +711,57 @@ class TestHeberFlowPoll:
         assert event.payload["aggressor_ind"] == "ASK"
 
     @pytest.mark.unit
+    def test_heber_row_normalizes_to_print_time_not_poll_time(self):
+        """Full poll-path chain: Heber Silver row (print time in ``ts_event``)
+        -> BronzeEvent -> NormalizationEngine -> rule-time signal age. The
+        normalized ``flow_ts_utc`` (what ``_signal_age_seconds`` prefers) must
+        be the print time, not the normalization wall-clock, or the per-bucket
+        age gate admits born-stale prints that preflight then rejects."""
+        import pandas as pd
+
+        from orion.processing.normalizer import NormalizationEngine
+        from orion.processing.rules.flow_rules import _signal_age_seconds
+        from orion.storage.models_silver import SilverSignal
+
+        svc = self._make_service()
+        now = datetime.now(UTC)
+        print_ts = now - timedelta(seconds=300)
+        row = pd.Series(
+            {
+                "event_id": "abc123",
+                "underlying": "SPY",
+                "symbol": "SPY",
+                "premium": 131572.0,
+                "put_call": "C",
+                "is_sweep": True,
+                "expiry": "2026-08-14",
+                "aggressor": "ask",
+                "ts_event": pd.Timestamp(print_ts),
+                "ts_ingest": pd.Timestamp(print_ts + timedelta(seconds=2)),
+                "ts_available": pd.Timestamp(print_ts + timedelta(seconds=26)),
+            }
+        )
+
+        event = svc._heber_row_to_event(row, now)
+        assert event is not None
+        assert event.event_ts_utc == print_ts
+
+        event.payload = NormalizationEngine.normalize_event(event.source, event.event_type, event.payload)
+        flow_ts = datetime.fromisoformat(event.payload["flow_ts_utc"])
+        assert abs((flow_ts - print_ts).total_seconds()) < 1.0
+
+        signal = SilverSignal(
+            signal_id="sig_1",
+            ticker="SPY",
+            signal_ts_utc=event.event_ts_utc,
+            signal_type="UW_FLOW",
+            features=dict(event.payload),
+        )
+        age = _signal_age_seconds(signal, datetime.now(UTC))
+        assert age is not None
+        assert 299.0 <= age <= 305.0
+
+    @pytest.mark.unit
     def test_row_without_ticker_returns_none(self):
         import pandas as pd
 
