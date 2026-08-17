@@ -25,9 +25,14 @@ OCC = "AAPL260821C00250000"
 NOW = datetime(2026, 8, 17, 14, 0, tzinfo=UTC)
 
 
-async def _halt_every_bucket() -> None:
+async def _halt_every_bucket(now: datetime = NOW) -> None:
     for bucket in ("0DTE", "SHORT_SWING", "SWING", "POSITION"):
-        await record_halt(bucket, profit_factor=0.3, n_closed=60, now=NOW)
+        await record_halt(bucket, profit_factor=0.3, n_closed=60, now=now)
+
+
+async def _halt_every_bucket_now() -> None:
+    """Halts live against the real wall clock, for paths that use it."""
+    await _halt_every_bucket(datetime.now(UTC))
 
 
 async def test_entry_preflight_rejects_while_the_bucket_is_halted() -> None:
@@ -75,6 +80,34 @@ async def test_entry_preflight_rejects_while_the_bucket_is_halted() -> None:
 
     assert result.ok is False
     assert result.reason.startswith("Bucket halted by measurement loop: 0DTE")
+
+
+async def test_submission_fence_blocks_a_halt_opened_after_preflight() -> None:
+    """Preflight passes, then the halt lands while the option chain is being
+    fetched. The submission authority re-reads it uncached, so the order is
+    never minted — an operator `--set` is not swallowed by the entry cache."""
+    from orion.core.circuit_breaker import CircuitBreaker
+
+    await init_db()
+    await CircuitBreaker().close()
+
+    engine = ExecutionEngine()
+    client = AsyncMock()
+    engine._gateway_client = client
+    engine._get_gateway_client = lambda: client
+
+    candidate = SimpleNamespace(ticker="AAPL", option_symbol=OCC, expiration_date=datetime.now(UTC))
+    decision = SimpleNamespace(
+        decision="EXECUTE", decision_id="d-1", executed_successfully=None, reason=None, execution_params={}
+    )
+
+    # The candidate is already past preflight when the halt is written.
+    await _halt_every_bucket_now()
+
+    await engine._submit_options_order(decision, candidate, num_contracts=1, option_price=1.0)
+
+    client.create_order.assert_not_awaited()
+    assert decision.reason.startswith("Bucket halted by measurement loop: 0DTE")
 
 
 async def test_close_position_submits_while_every_bucket_is_halted(monkeypatch) -> None:
