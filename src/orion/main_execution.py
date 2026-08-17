@@ -36,6 +36,8 @@ logger = setup_struct_logger("orion.execution")
 # Liveness cadence budget: the ~1s execution loop publishes every iteration; the
 # dead-man watchdog alerts if no successful iteration lands within 300s.
 EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS = 300
+# Statuses the execution engine sets to mean "this attempt is resolved".
+_TERMINAL_EXEC_STATUSES = frozenset({DecisionStatus.TRUE, DecisionStatus.FALSE, DecisionStatus.SKIPPED})
 _EXECUTION_STARTUP_LIVENESS_INTERVAL_SECONDS = 60.0
 
 # Re-export for backward compatibility (tests import from here)
@@ -209,15 +211,26 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
                 await save_decision(decision, candidate)
 
                 # 5. Execute (if EXECUTE)
-                exec_status = DecisionStatus.SKIPPED
+                exec_status: str = DecisionStatus.SKIPPED
                 if decision.decision == DecisionAction.EXECUTE:
                     try:
                         await execution_engine.execute_order(decision, candidate)
 
-                        if decision.executed_successfully == DecisionStatus.TRUE:
-                            exec_status = DecisionStatus.TRUE
-                        else:
-                            exec_status = DecisionStatus.FALSE
+                        # The engine distinguishes a business-reason skip
+                        # (illiquid, earnings window, position cap, factor
+                        # gate) from a genuine failure (risk rejection, price
+                        # fetch failure, missing expiry) — persist that
+                        # distinction instead of collapsing both to FALSE.
+                        # Anything else (still PENDING, or unset) means the
+                        # engine returned without resolving the attempt:
+                        # record FALSE rather than leave a PENDING row that
+                        # reconcile_orphaned_decisions can never repair,
+                        # since it repairs from a linked order record and
+                        # an unresolved attempt has none.
+                        engine_status = decision.executed_successfully or ""
+                        exec_status = (
+                            engine_status if engine_status in _TERMINAL_EXEC_STATUSES else DecisionStatus.FALSE
+                        )
 
                     except Exception as exe:
                         logger.error(f"Execution Exception: {exe}")
