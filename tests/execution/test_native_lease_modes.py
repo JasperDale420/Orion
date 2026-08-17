@@ -273,6 +273,50 @@ class TestDataQualityLeaseLossIsFatal:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+class TestDataQualityLeaseCheckSurvivesTransientDbError:
+    async def test_transient_db_error_does_not_stop_the_daemon(self, monkeypatch) -> None:
+        # A DB blip during the ownership check (e.g. a Docker VM restart) must
+        # be treated as "unknown, retry" — never as confirmed loss (fatal) and
+        # never as confirmed ownership (silently continuing unverified). The
+        # renew loop should survive the failing tick and resume normal
+        # heartbeats once the DB recovers, without ever setting shutdown_event.
+        import asyncio
+
+        from sqlalchemy.exc import SQLAlchemyError
+
+        monkeypatch.setattr(main_data_quality, "_LEASE_RENEW_INTERVAL_SECONDS", 0.01)
+        monkeypatch.setattr(main_data_quality, "CHECK_INTERVAL_SECONDS", 0.05)
+
+        lease_check = AsyncMock(side_effect=[SQLAlchemyError("db blip"), True, True])
+
+        with (
+            patch.object(main_data_quality, "_lease_is_ours", lease_check),
+            patch.object(main_data_quality, "acquire_service_lease", AsyncMock(return_value="run-dq")),
+            patch.object(main_data_quality, "renew_service_lease", AsyncMock()),
+            patch.object(main_data_quality, "run_quality_checks", AsyncMock(return_value={})),
+            patch.object(main_data_quality, "_is_market_hours", MagicMock(return_value=False)),
+            patch.object(main_data_quality, "init_db", AsyncMock()),
+        ):
+            shutdown = asyncio.Event()
+            task = asyncio.create_task(main_data_quality.run_scheduled(shutdown))
+            try:
+                # Deterministic wait for both the failing and the following
+                # successful ownership check, rather than a fixed sleep.
+                for _ in range(500):
+                    if lease_check.call_count >= 2:
+                        break
+                    await asyncio.sleep(0.01)
+
+                assert lease_check.call_count >= 2, "renew loop did not survive past the failing tick"
+                assert not shutdown.is_set(), "a transient DB error must not be treated as lease loss"
+                assert not task.done(), "the daemon must keep running through a transient DB error"
+            finally:
+                shutdown.set()
+                await asyncio.wait_for(task, timeout=1.0)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_lease_owner_ids_are_distinct_service_ids() -> None:
     """position_monitor and data_quality use distinct lease service ids, so
     both can hold a lease at once without blocking each other."""
