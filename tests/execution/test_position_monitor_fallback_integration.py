@@ -39,6 +39,13 @@ def _tracked_position(
     )
 
 
+class _AllContextsResolved(set):
+    """Stands in for `_entry_context_applied` with every symbol resolved."""
+
+    def __contains__(self, item: object) -> bool:
+        return True
+
+
 def _build_monitor_with_classifier(classifier) -> PositionMonitor:
     """Construct a PositionMonitor without going through __init__'s side effects.
 
@@ -48,6 +55,14 @@ def _build_monitor_with_classifier(classifier) -> PositionMonitor:
     monitor = PositionMonitor.__new__(PositionMonitor)
     monitor.tracked_positions = {}
     monitor.exit_classifier = classifier
+    # These tests exercise steady-state positions, i.e. ones whose entry context
+    # has already resolved. evaluate_exits withholds the classifier from a
+    # position still being enriched, so say so explicitly rather than having
+    # every case enumerate its own symbols.
+    monitor._entry_context_applied = _AllContextsResolved()
+    monitor._context_deferred_since = {}
+    monitor._context_defer_warned_at = {}
+    monitor._policy_failure_paged = set()
     return monitor
 
 
