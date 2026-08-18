@@ -333,6 +333,11 @@ def _try_vix_proxy_from_heber(proxy_symbol: str, multiplier: float) -> dict[str,
         "vvix": None,
         "vix_1d_change": vix_1d_change,
         "vix_regime": _map_vix_proxy_to_regime(vix_approx),
+        # An ETF-price proxy, not a real spot-VIX print — consumers must not
+        # treat this as trusted enough to hard-block trading on. See
+        # orion.analysis.regime.is_trusted_vix_source.
+        "vix_source": f"proxy:{proxy_symbol}",
+        "vix_observed_at": latest["_ts"].to_pydatetime(),
     }
 
 
@@ -452,6 +457,8 @@ async def persist_regime_snapshot(
         "session_regime": snapshot.session.value if snapshot.session else None,
         "vix_regime": snapshot.vix_regime.value if snapshot.vix_regime else None,
         "vix_level": snapshot.vix_level,
+        "vix_source": snapshot.vix_source,
+        "vix_observed_at": snapshot.vix_observed_at,
         "realized_vol": snapshot.realized_vol,
         "trend_strength": snapshot.trend_strength,
         "risk_score": snapshot.risk_score,
@@ -495,6 +502,8 @@ async def seed_regime_snapshots_from_db(limit: int = 500) -> None:
                     "session_regime": row.session_regime,
                     "vix_regime": row.vix_regime,
                     "vix_level": row.vix_level,
+                    "vix_source": row.vix_source,
+                    "vix_observed_at": row.vix_observed_at,
                     "realized_vol": row.realized_vol,
                     "trend_strength": row.trend_strength,
                     "risk_score": row.risk_score,

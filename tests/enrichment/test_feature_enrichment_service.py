@@ -65,11 +65,17 @@ class TestPreferHeberContextReads:
         assert _prefer_heber_context_reads() is expected
 
     @pytest.mark.unit
-    def test_default_is_true(self):
-        from orion.main_feature_enrichment import _prefer_heber_context_reads
+    def test_default_is_false(self):
+        from orion.config import SystemSettings
 
-        # Default is True (field default in SystemSettings)
-        assert _prefer_heber_context_reads() is True
+        # Assert the field's own declared default, not the resolved
+        # singleton — `uv run` auto-loads the repo-root .env, so this must
+        # not depend on whatever that file (or the real environment)
+        # happens to currently set the var to. Defaults false (2026-08-18
+        # incident: RegimeGate had no way to distinguish this flag's proxy
+        # vix source from a trusted one) so a raw/non-compose launch can't
+        # silently re-enable it.
+        assert SystemSettings.model_fields["feature_enrichment_prefer_heber_context"].default is False
 
 
 # ---------------------------------------------------------------------------

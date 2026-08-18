@@ -454,9 +454,14 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     snapshot = regime_detector.detect(
                         ts=now,
                         cum_ret=cum_ret,
-                        realized_vol=0.015,  # Default; could compute from bars
+                        # Hardcoded placeholder, not a measurement -- must
+                        # never be treated as corroborating (or refuting) a
+                        # vix reading. See 2026-08-18 adversarial review.
+                        realized_vol=0.015,
                         vix=vix_data.get("vix"),
                         vix_1d_change=vix_data.get("vix_1d_change"),
+                        vix_source=vix_data.get("vix_source"),
+                        vix_observed_at=vix_data.get("vix_observed_at"),
                         market_tide_net=market_tide_net,
                     )
 

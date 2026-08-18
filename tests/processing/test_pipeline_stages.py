@@ -25,7 +25,14 @@ from orion.storage.models_gold import CandidateTrade
 _regime_snapshot_id_seq = itertools.count(1)
 
 
-async def _insert_regime_snapshot(*, ts_utc: datetime, vix_level: float | None, ticker: str = "SPY") -> None:
+async def _insert_regime_snapshot(
+    *,
+    ts_utc: datetime,
+    vix_level: float | None,
+    ticker: str = "SPY",
+    vix_source: str | None = None,
+    vix_observed_at: datetime | None = None,
+) -> None:
     # SQLite's rowid-alias autoincrement only kicks in for an `Integer` primary
     # key column; the model declares `BigInteger`, so the in-memory test DB
     # needs an explicit id (Postgres autoincrements this fine in prod).
@@ -36,6 +43,8 @@ async def _insert_regime_snapshot(*, ts_utc: datetime, vix_level: float | None, 
                 ts_utc=ts_utc,
                 ticker=ticker,
                 vix_level=vix_level,
+                vix_source=vix_source,
+                vix_observed_at=vix_observed_at,
                 realized_vol=None,
             )
         )
@@ -86,7 +95,7 @@ async def test_regime_gate_continues_in_normal_conditions():
 async def test_regime_gate_skips_on_shock():
     gate = RegimeGate()
 
-    # SHOCK should trigger SKIP
+    # SHOCK backed by a trusted spot-VIX source should trigger SKIP
     snapshot = MarketRegimeSnapshot(
         ts=datetime.now(UTC),
         trend=TrendRegime.FLAT,
@@ -94,6 +103,7 @@ async def test_regime_gate_skips_on_shock():
         risk=RiskRegime.RISK_OFF,
         session=SessionRegime.MIDDAY,
         vix_regime=VIXRegime.EXTREME,
+        vix_source="spot_vix",
     )
     gate.multi_axis_detector.detect = MagicMock(return_value=snapshot)
 
@@ -103,6 +113,32 @@ async def test_regime_gate_skips_on_shock():
     assert result.action == "SKIP"
     assert "SHOCK" in result.reason
     assert result.trace.get("regime_blocked") is True
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_continues_on_untrusted_proxy_shock():
+    """A SHOCK classification driven by an unverified vix source (the VIXY
+    ETF-price proxy, or no source tagged at all) must not hard-block —
+    2026-08-18 adversarial review found the proxy formula is not a valid
+    spot-VIX estimator and was hard-blocking all trading off it."""
+    gate = RegimeGate()
+
+    snapshot = MarketRegimeSnapshot(
+        ts=datetime.now(UTC),
+        trend=TrendRegime.FLAT,
+        vol=VolRegime.SHOCK,
+        risk=RiskRegime.NEUTRAL,
+        session=SessionRegime.MIDDAY,
+        vix_regime=VIXRegime.EXTREME,
+        vix_source="proxy:VIXY",
+    )
+    gate.multi_axis_detector.detect = MagicMock(return_value=snapshot)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert ctx.regime_size_multiplier > 0
 
 
 @pytest.mark.asyncio
@@ -134,13 +170,14 @@ async def test_regime_gate_populates_context():
 
 
 @pytest.mark.asyncio
-async def test_regime_gate_uses_fresh_snapshot_to_detect_real_shock():
-    """A fresh regime_snapshots row (written by feature_enrichment) with a
-    genuine extreme vix_level must feed detect() and trigger the SHOCK block —
-    proving the gate is no longer blind to real market data when it exists."""
+async def test_regime_gate_uses_fresh_trusted_snapshot_to_detect_real_shock():
+    """A fresh regime_snapshots row backed by a trusted spot-VIX source must
+    feed detect() and trigger the SHOCK block — proving the gate is no
+    longer blind to real market data when a trustworthy reading exists."""
     gate = RegimeGate()  # real detector, not mocked — exercise the actual wiring
 
-    await _insert_regime_snapshot(ts_utc=datetime.now(UTC), vix_level=40.0)
+    now = datetime.now(UTC)
+    await _insert_regime_snapshot(ts_utc=now, vix_level=40.0, vix_source="spot_vix", vix_observed_at=now)
 
     ctx = PipelineContext(candidate=_make_candidate())
     result = await gate.evaluate(ctx)
@@ -149,6 +186,144 @@ async def test_regime_gate_uses_fresh_snapshot_to_detect_real_shock():
     assert "SHOCK" in result.reason
     assert result.trace.get("regime_inputs") == "regime_snapshots"
     assert ctx.regime_snapshot.vol == VolRegime.SHOCK
+    # 2026-08-18 adversarial review (gpt-5.6-terra, round 2): the underlying
+    # observation's own timestamp must reach the decision snapshot too, not
+    # just the DB row — otherwise the evidence for *why* this was trusted is
+    # lost from the in-flight snapshot and decision trace.
+    assert ctx.regime_snapshot.vix_observed_at == now
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_does_not_block_on_fresh_untrusted_proxy_snapshot():
+    """2026-08-18 adversarial review (gpt-5.6-terra): a fresh regime_snapshots
+    row whose vix_level came from the VIXY-ETF-price proxy (or carries no
+    source tag) must still classify as SHOCK for visibility, but must NOT
+    hard-block trading — that proxy is not a validated spot-VIX estimator."""
+    gate = RegimeGate()
+
+    now = datetime.now(UTC)
+    await _insert_regime_snapshot(ts_utc=now, vix_level=40.0, vix_source="proxy:VIXY", vix_observed_at=now)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "regime_snapshots"
+    assert ctx.regime_snapshot.vol == VolRegime.SHOCK
+    assert ctx.regime_size_multiplier > 0
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_ignores_vix_with_stale_underlying_observation():
+    """A regime_snapshots row can be rewritten every ~5 minutes (so ts_utc
+    always looks fresh) while replaying the same stale VIXY close, e.g. over
+    a weekend or feed outage. The row's own write time must not be trusted
+    as a proxy for how current the underlying vix observation is."""
+    gate = RegimeGate()
+
+    now = datetime.now(UTC)
+    stale_observation = now - timedelta(minutes=45)
+    await _insert_regime_snapshot(ts_utc=now, vix_level=40.0, vix_source="spot_vix", vix_observed_at=stale_observation)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_treats_missing_observed_at_as_stale():
+    """A vix_level with no vix_observed_at at all (e.g. a row written before
+    this column existed) must not be trusted as fresh just because it has a
+    source tag and a recent write time."""
+    gate = RegimeGate()
+
+    await _insert_regime_snapshot(ts_utc=datetime.now(UTC), vix_level=40.0, vix_source="spot_vix", vix_observed_at=None)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_alerts_once_on_proxy_would_block(caplog):
+    """An untrusted-source SHOCK reading that would have blocked trading if
+    it were trusted must raise an operator-visible alert — silently sizing
+    around it is not enough when the underlying signal may be a real shock
+    the system currently has no trusted way to confirm."""
+    gate = RegimeGate()
+
+    now = datetime.now(UTC)
+    await _insert_regime_snapshot(ts_utc=now, vix_level=40.0, vix_source="proxy:VIXY", vix_observed_at=now)
+
+    with caplog.at_level(logging.CRITICAL):
+        for _ in range(3):
+            ctx = PipelineContext(candidate=_make_candidate())
+            await gate.evaluate(ctx)
+
+    alerts = [r for r in caplog.records if "proxy_would_block" in r.getMessage()]
+    assert len(alerts) == 1
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_proxy_alert_rearms_after_clearing(caplog):
+    """The proxy_would_block latch must not stay permanently tripped once
+    set — after the condition clears, a later recurrence must alert again
+    rather than staying silently suppressed forever."""
+    gate = RegimeGate()
+
+    await _insert_regime_snapshot(
+        ts_utc=datetime.now(UTC), vix_level=40.0, vix_source="proxy:VIXY", vix_observed_at=datetime.now(UTC)
+    )
+
+    with caplog.at_level(logging.CRITICAL):
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+
+        # Force a fresh DB read past the 60s cache instead of waiting it out,
+        # then clear the condition with a non-SHOCK reading.
+        gate._cache_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await _insert_regime_snapshot(
+            ts_utc=datetime.now(UTC), vix_level=10.0, vix_source="proxy:VIXY", vix_observed_at=datetime.now(UTC)
+        )
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+
+        # Recur: SHOCK from an untrusted source again.
+        gate._cache_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await _insert_regime_snapshot(
+            ts_utc=datetime.now(UTC), vix_level=40.0, vix_source="proxy:VIXY", vix_observed_at=datetime.now(UTC)
+        )
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+
+    alerts = [r for r in caplog.records if "proxy_would_block" in r.getMessage()]
+    assert len(alerts) == 2
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_cache_never_outlives_vix_observation_freshness_deadline():
+    """2026-08-18 adversarial review (round 2): the 60s read-cache capped
+    expiry at the row's own write-time deadline only. A vix reading whose
+    underlying observation is already 14m59s old must not still be trusted
+    61 seconds later just because the row's write time has headroom."""
+    gate = RegimeGate()
+
+    now = datetime.now(UTC)
+    almost_stale_observation = now - timedelta(minutes=15) + timedelta(seconds=5)
+    await _insert_regime_snapshot(
+        ts_utc=now, vix_level=40.0, vix_source="spot_vix", vix_observed_at=almost_stale_observation
+    )
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.trace.get("regime_inputs") == "regime_snapshots"
+    assert result.action == "SKIP"
+
+    vix_deadline = almost_stale_observation + timedelta(minutes=15)
+    assert gate._cache_expires_at is not None
+    assert gate._cache_expires_at <= vix_deadline + timedelta(seconds=1)
 
 
 @pytest.mark.asyncio
@@ -287,7 +462,9 @@ async def test_regime_gate_cache_never_outlives_row_freshness_deadline():
     gate = RegimeGate()
 
     almost_stale_ts = datetime.now(UTC) - timedelta(minutes=15) + timedelta(seconds=5)
-    await _insert_regime_snapshot(ts_utc=almost_stale_ts, vix_level=40.0)
+    await _insert_regime_snapshot(
+        ts_utc=almost_stale_ts, vix_level=40.0, vix_source="spot_vix", vix_observed_at=almost_stale_ts
+    )
 
     ctx = PipelineContext(candidate=_make_candidate())
     result = await gate.evaluate(ctx)

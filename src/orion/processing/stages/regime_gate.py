@@ -9,10 +9,11 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 
-from orion.analysis.regime import MultiAxisRegimeDetector
+from orion.analysis.regime import MultiAxisRegimeDetector, VolRegime, is_trusted_vix_source
 from orion.analysis.regime_risk import RegimeRiskManager
 from orion.processing.pipeline import PipelineContext, StageResult
 from orion.shared.logger import setup_struct_logger
@@ -49,6 +50,8 @@ class _RegimeInputs:
     """Real market inputs sourced from the regime_snapshots table, if any."""
 
     vix: float | None
+    vix_source: str | None
+    vix_observed_at: datetime | None
     realized_vol: float | None
     source: str  # "regime_snapshots" when real data was found, else "none"
 
@@ -62,6 +65,7 @@ class RegimeGate:
         self._cached_inputs: _RegimeInputs | None = None
         self._cache_expires_at: datetime | None = None
         self._warned_inert = False
+        self._proxy_shock_alerted = False
 
     @property
     def name(self) -> str:
@@ -84,9 +88,10 @@ class RegimeGate:
 
         Feeds detect() real vix/realized_vol values when a fresh, genuinely
         populated regime_snapshots row exists. Any failure (DB error, DB
-        timeout, no row, a stale or future-dated row, or a fresh row with no
-        vix_level captured) degrades to source="none" — never blocks trading
-        and never crashes or stalls the pipeline.
+        timeout, no row, a stale or future-dated row, a fresh row with no
+        vix_level captured, or a vix reading whose own observation is stale)
+        degrades to source="none" — never blocks trading and never crashes
+        or stalls the pipeline.
         """
         now = datetime.now(UTC)
         if self._cached_inputs is not None and self._cache_expires_at is not None and now < self._cache_expires_at:
@@ -99,7 +104,7 @@ class RegimeGate:
             logger.warning("regime_gate_input_read_failed", exc_info=True)
             row = None
 
-        inputs = _RegimeInputs(vix=None, realized_vol=None, source="none")
+        inputs = _RegimeInputs(vix=None, vix_source=None, vix_observed_at=None, realized_vol=None, source="none")
         cache_expires_at = now + timedelta(seconds=REGIME_INPUT_CACHE_SECONDS)
 
         if row is not None and row.vix_level is not None:
@@ -109,12 +114,35 @@ class RegimeGate:
             # skew or bad data) would otherwise read as "fresh forever" until
             # real time caught up to its timestamp, latching a false block.
             if age_seconds is not None and 0 <= age_seconds <= REGIME_INPUT_FRESHNESS_MINUTES * 60:
-                inputs = _RegimeInputs(vix=row.vix_level, realized_vol=row.realized_vol, source="regime_snapshots")
-                # The 60s read-cache must not keep this input alive past the
-                # row's own freshness deadline — cap the cache expiry at
-                # whichever comes first.
-                row_deadline = row_ts + timedelta(minutes=REGIME_INPUT_FRESHNESS_MINUTES)
-                cache_expires_at = min(cache_expires_at, row_deadline)
+                # The row's own write time is not proof the underlying vix
+                # observation is current — a live process can re-persist the
+                # same stale close every ~5 minute cycle and look fresh by
+                # write time alone. A missing observed_at (e.g. a row
+                # written before this column existed) is treated the same
+                # as stale: fail toward not trusting it.
+                observed_at = ensure_utc(row.vix_observed_at) if row.vix_observed_at is not None else None
+                vix_age = (now - observed_at).total_seconds() if observed_at is not None else None
+                vix_is_fresh = vix_age is not None and 0 <= vix_age <= REGIME_INPUT_FRESHNESS_MINUTES * 60
+
+                if vix_is_fresh:
+                    inputs = _RegimeInputs(
+                        vix=row.vix_level,
+                        vix_source=row.vix_source,
+                        vix_observed_at=observed_at,
+                        realized_vol=row.realized_vol,
+                        source="regime_snapshots",
+                    )
+                    # The 60s read-cache must not keep this input alive past
+                    # the row's own freshness deadline, NOR past the
+                    # underlying vix observation's own deadline — a row read
+                    # with an observation already 14m59s old must not still
+                    # be trusted 61 seconds later just because the row write
+                    # itself has headroom. Cap at whichever comes first.
+                    row_deadline = row_ts + timedelta(minutes=REGIME_INPUT_FRESHNESS_MINUTES)
+                    cache_expires_at = min(cache_expires_at, row_deadline)
+                    if observed_at is not None:  # always true here; narrows for the type checker
+                        vix_deadline = observed_at + timedelta(minutes=REGIME_INPUT_FRESHNESS_MINUTES)
+                        cache_expires_at = min(cache_expires_at, vix_deadline)
 
         if inputs.source == "none" and not self._warned_inert:
             logger.warning(
@@ -135,9 +163,11 @@ class RegimeGate:
         # Detect multi-axis regime snapshot. Only override vix/realized_vol
         # when a real, fresh reading was found — otherwise this call is
         # byte-for-byte the same no-input call as before this fix.
-        detect_kwargs: dict[str, float] = {}
+        detect_kwargs: dict[str, Any] = {}
         if regime_inputs.source == "regime_snapshots":
-            detect_kwargs["vix"] = regime_inputs.vix  # type: ignore[assignment]
+            detect_kwargs["vix"] = regime_inputs.vix
+            detect_kwargs["vix_source"] = regime_inputs.vix_source
+            detect_kwargs["vix_observed_at"] = regime_inputs.vix_observed_at
             if regime_inputs.realized_vol is not None:
                 detect_kwargs["realized_vol"] = regime_inputs.realized_vol
 
@@ -146,6 +176,29 @@ class RegimeGate:
             **detect_kwargs,
         )
         ctx.regime_snapshot = regime_snapshot
+
+        # A SHOCK classification backed by an untrusted vix source (today,
+        # only the VIXY-ETF-price proxy exists) never hard-blocks — see
+        # should_trade() — but it must still be operator-visible instead of
+        # silently sizing around a signal that may be a real shock the
+        # system has no trusted way to confirm. Alert once per onset, not
+        # once per candidate, to avoid spamming logs while it persists.
+        proxy_would_block = regime_snapshot.vol == VolRegime.SHOCK and not is_trusted_vix_source(
+            regime_snapshot.vix_source
+        )
+        if proxy_would_block and not self._proxy_shock_alerted:
+            logger.critical(
+                "proxy_would_block",
+                extra={
+                    "event": "proxy_would_block",
+                    "vix_level": regime_snapshot.vix_level,
+                    "vix_source": regime_snapshot.vix_source,
+                    "vix_regime": regime_snapshot.vix_regime.value,
+                },
+            )
+            self._proxy_shock_alerted = True
+        elif not proxy_would_block:
+            self._proxy_shock_alerted = False
 
         # Check if regime allows trading
         if not self.risk_manager.should_trade(regime_snapshot):
