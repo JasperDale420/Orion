@@ -164,6 +164,15 @@ max-hold, drawdown-from-peak, no-progress, and the 0DTE flatten cutoff.
 |---|---|---|
 | `ORION_EXIT_BUCKET_OVERRIDES` | `{}` | JSON, per-bucket, deep-merged over `DEFAULT_BUCKET_PARAMS`, e.g. `{"0DTE": {"profit_target_pct": 0.5}}` |
 
+`min_dte` is a **calendar-day** floor compared **strictly**: the position is
+exited once *fewer* than `min_dte` whole calendar days remain between today's
+New York date and the contract's expiry date — the same DTE count the entry
+rules and the per-bucket entry caps use, so a position is never exited on the
+DTE that admitted it. `min_dte=1` (SHORT_SWING) therefore exits on expiry day,
+`min_dte=2` (SWING, POSITION) exits with one day left, and `min_dte=0` (0DTE)
+disables the rule, leaving the 15:45 ET `flatten_after_et` cutoff as that
+bucket's deadline.
+
 ## Heuristic weights
 
 Scoring weights for the flow heuristic pre-filter (used when LightGBM is unavailable or bypassed). All have `ORION_HEURISTIC_` prefix. Defaults are tuned — change only with solver-evaluation evidence.
