@@ -817,6 +817,7 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
     set guarantees zero prior fills) and a second recovery of the same order is
     deduped — proving the double-count safety the storm-fix comment relies on."""
     from orion.execution.fill_processor import FillProcessor
+    import orion.execution.execution_engine as mod
     import orion.execution.fill_processor as fp_mod
 
     processed: set[str] = set()
@@ -833,6 +834,11 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
     monkeypatch.setattr(fp_mod, "is_fill_processed", _is_processed)
     monkeypatch.setattr(fp_mod, "mark_fill_processed", _mark)
     monkeypatch.setattr(fp_mod, "persist_fill_record", _persist)
+    # _process_single_fill ALSO verifies via its own is_fill_processed import
+    # (a separate name binding from fp_mod's) after delegating to
+    # FillProcessor — patch both against the SAME shared `processed` set so
+    # this test simulates one coherent idempotency store, not two.
+    monkeypatch.setattr(mod, "is_fill_processed", _is_processed)
 
     outcome = MagicMock()
     outcome.is_closing = False
