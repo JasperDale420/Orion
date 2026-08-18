@@ -329,7 +329,7 @@ For end-to-end pipeline freshness use `tests/e2e/test_live_data_flow.py` (see
 | Operation | Command |
 |---|---|
 | Hot-restart execution | `launchctl kickstart -k gui/$(id -u)/com.empire.orion.execution` |
-| See last lease holder | `psql … -c "select * from system_status where component like 'service_lease%';"` |
+| See last lease holder | `psql … -c "select * from system_status where key like 'service_lease%';"` |
 | Stale lease quick clear | Wait 120 s after killing all owners; row goes stale automatically |
 | Close stuck circuit | `uv run python -m orion.jobs.reset_circuit_breaker` |
 | Emergency close orphans | `uv run python scripts/close_orphaned_positions.py --min-value 50` |

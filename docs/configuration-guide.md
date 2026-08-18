@@ -153,13 +153,16 @@ Per-regime risk multipliers live in `config/regime_risk.yaml` (not env-vars).
 
 ## Exit fallback rules
 
-Deterministic exits independent of the ML exit classifier (triggers when classifier is unavailable):
+Deterministic, per-bucket barriers (`execution/exit_fallback_rules.py`) are the
+**primary exit policy**, not a fallback — the ML exit classifier is only
+consulted for a bucket that has a trained model loaded, and only after the
+barriers pass. Defaults live in `DEFAULT_BUCKET_PARAMS` per bucket (`0DTE`,
+`SHORT_SWING`, `SWING`, `POSITION`): profit target, stop loss, min DTE,
+max-hold, drawdown-from-peak, no-progress, and the 0DTE flatten cutoff.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ORION_EXIT_FALLBACK_PROFIT_TARGET_PCT` | `1.00` | Exit when position gains ≥100% (doubles in value) |
-| `ORION_EXIT_FALLBACK_MIN_DTE` | `1` | Exit when option DTE < this value |
-| `ORION_EXIT_FALLBACK_MAX_DRAWDOWN_FROM_PEAK_PCT` | `0.50` | Exit when position drawdown from peak exceeds 50% |
+| `ORION_EXIT_BUCKET_OVERRIDES` | `{}` | JSON, per-bucket, deep-merged over `DEFAULT_BUCKET_PARAMS`, e.g. `{"0DTE": {"profit_target_pct": 0.5}}` |
 
 ## Heuristic weights
 

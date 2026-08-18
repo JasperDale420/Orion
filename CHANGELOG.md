@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Docs caught up to this week's risk/circuit-breaker/exit-policy work.** `execution/risk_manager.py` references (CLAUDE.md, AGENTS.md, `docs/code-standards.md`, `docs/codebase-summary.md`) now point at the real path, `execution/risk/manager.py`; `docs/system-architecture.md` now cites the actual `RiskManager.check_order` method instead of a `check_pre_trade` that doesn't exist. `docs/configuration-guide.md`'s "Exit fallback rules" section documented three env vars (`ORION_EXIT_FALLBACK_PROFIT_TARGET_PCT`, `_MIN_DTE`, `_MAX_DRAWDOWN_FROM_PEAK_PCT`) that no longer exist and described the deterministic per-bucket barriers as a fallback that only triggers when the ML exit classifier is unavailable — backwards from current behavior, where the barriers are the primary exit policy and the ML classifier only runs afterward for a bucket with a trained model loaded. It's corrected to describe `ORION_EXIT_BUCKET_OVERRIDES` and the actual priority. `docs/deployment-guide.md`'s lease-holder query used a `component` column that doesn't exist on `system_status`; fixed to `key`.
+
 ### Added
 
 - **Every entry now records the option's state at the moment it was decided.** The chain response Orion already fetches to price an entry carries the contract's implied volatility, greeks, open interest, volume, underlying price and the vendor's own snapshot timestamp — all of it was read for the risk gate and then thrown away, leaving nothing to reconstruct what the market looked like when a trade was taken. All of it is now kept in `strategy_decisions.decision_trace_json.entry_quote` alongside the bid/ask/mid already stored there. Any field the vendor omits is recorded as absent; nothing here can fail or delay an order.

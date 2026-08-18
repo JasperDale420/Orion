@@ -237,7 +237,7 @@ When modifying order submission or risk sync, preserve the `ORDER_ID_PREFIX` fil
 
 ## Safety-Critical Code
 
-- **RiskManager** (`execution/risk_manager.py`) — Daily loss limits, max positions, Greeks limits, sector concentration, 0DTE winddown, correlation-adjusted sizing
+- **RiskManager** (`execution/risk/manager.py`) — Daily loss limits, max positions, Greeks limits, sector concentration, 0DTE winddown, correlation-adjusted sizing
 - **ExecutionEngine** (`execution/execution_engine.py`) — Options-only (rejects candidates without `option_symbol`), routes through Data-Gateway
 - Paper mode default (`ORION_STAGE=paper`, `ALPACA_PAPER=True`)
 - Regime filter blocks trading in SHOCK/extreme VIX conditions

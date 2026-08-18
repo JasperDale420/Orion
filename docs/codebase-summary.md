@@ -58,7 +58,7 @@ When onboarding, read these in order to understand the loop:
 5. **`execution/execution_engine.py`** — `ExecutionEngine` (options-only). Owns
    `ORDER_ID_PREFIX = "orion_"` — never weaken; it is the only thing that keeps
    Orion from grabbing other systems' positions.
-6. **`execution/risk_manager.py`** (under `execution/risk/`) — Daily loss limit,
+6. **`execution/risk/manager.py`** — Daily loss limit,
    max positions, Greeks limit, sector concentration, 0DTE winddown,
    correlation-adjusted sizing.
 7. **`execution/position_monitor.py`** — Continuous exit loop.

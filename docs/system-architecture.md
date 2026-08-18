@@ -169,7 +169,7 @@ Orion **places real options orders**. The boundary lives in
   positions to itself and trip its own risk limits.
 - **Pre-trade gates** (in order):
   1. `SignalPreflight` — schema and freshness sanity checks.
-  2. `RiskManager.check_pre_trade` — daily loss limit, max positions, Greeks
+  2. `RiskManager.check_order` — daily loss limit, max positions, Greeks
      limit, sector concentration, 0DTE winddown, correlation-adjusted sizing.
      See [`code-standards.md`](code-standards.md#safety-critical-code).
   3. Circuit breaker (`core/circuit_breaker.py`) — opens on consecutive
