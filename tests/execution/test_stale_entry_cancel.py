@@ -817,6 +817,7 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
     set guarantees zero prior fills) and a second recovery of the same order is
     deduped — proving the double-count safety the storm-fix comment relies on."""
     from orion.execution.fill_processor import FillProcessor
+    import orion.execution.execution_engine as mod
     import orion.execution.fill_processor as fp_mod
 
     processed: set[str] = set()
@@ -833,6 +834,11 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
     monkeypatch.setattr(fp_mod, "is_fill_processed", _is_processed)
     monkeypatch.setattr(fp_mod, "mark_fill_processed", _mark)
     monkeypatch.setattr(fp_mod, "persist_fill_record", _persist)
+    # _process_single_fill ALSO verifies via its own is_fill_processed import
+    # (a separate name binding from fp_mod's) after delegating to
+    # FillProcessor — patch both against the SAME shared `processed` set so
+    # this test simulates one coherent idempotency store, not two.
+    monkeypatch.setattr(mod, "is_fill_processed", _is_processed)
 
     outcome = MagicMock()
     outcome.is_closing = False
@@ -1188,6 +1194,47 @@ async def test_fallback_observed_partial_fill_recovery_failure_defers_the_cancel
     assert n == 0
     client.cancel_order.assert_not_awaited()
     ee._remove_pending_order_compat.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_repeated_partial_fill_recovery_failure_eventually_gives_up_and_alerts(monkeypatch) -> None:
+    """[high, from adversarial review round 4] A recovery that keeps failing
+    (e.g. FillProcessor's in-memory partial-fill tracker already advanced
+    past this quantity on the first failed attempt, so a retry can never
+    re-attempt the write that failed) must not loop silently forever with
+    the day-trading buying power reserved. It is routed through the SAME
+    backoff/give-up/alert state machine a rejected cancel uses, so it ends in
+    a durable operator alert after _CANCEL_MAX_ATTEMPTS."""
+    clock = _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    sent: list[str] = []
+
+    async def _fake_alert(message, *, dedupe_key=None):
+        sent.append(dedupe_key or message)
+        return True
+
+    monkeypatch.setattr(mod, "send_discord_alert", _fake_alert, raising=False)
+
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock(side_effect=RuntimeError("db write failed"))
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "QQQ"}]
+    )
+    order = {"id": "b-1", "status": "partially_filled", "filled_qty": "2", "qty": "5"}
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[order])
+    client.cancel_order = AsyncMock(return_value={})
+
+    max_attempts = mod.ExecutionEngine._CANCEL_MAX_ATTEMPTS
+    for _ in range(max_attempts + 3):
+        clock[0] += 10_000.0
+        await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()  # the ambiguous mutation is never sent, even after giving up
+    assert ee._cancel_attempts["b-1"].gave_up is True
+    assert len(sent) == 1  # one alert, not one per sweep
 
 
 @pytest.mark.unit

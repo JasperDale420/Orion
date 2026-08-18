@@ -25,6 +25,7 @@ from orion.execution.fill_processor import FillProcessor, maybe_snapshot_positio
 from orion.execution.persistence import (
     count_open_journal_positions,
     has_processed_fill_for_order,
+    is_fill_processed,
     persist_exit_decision,
     persist_exit_order_rejection,
     persist_order_finalize,
@@ -2764,8 +2765,16 @@ class ExecutionEngine:
                         # proceed regardless — not flipping would loop the
                         # 2026-06-22 storm forever), this order is still open:
                         # sending the cancel is a mutation WE control, and
-                        # there is no reason to spend it now. Defer to next
-                        # sweep instead of losing this quantity permanently.
+                        # there is no reason to spend it now. Defer instead of
+                        # losing this quantity permanently — routed through the
+                        # SAME backoff/give-up/alert state machine a rejected
+                        # cancel uses, so a recovery that can never succeed
+                        # (e.g. FillProcessor's in-memory partial-fill tracker
+                        # already advanced past this quantity, so a retry can
+                        # never re-attempt the write that failed) still ends
+                        # in a durable operator alert after
+                        # ``_CANCEL_MAX_ATTEMPTS`` instead of looping silently
+                        # forever with the day-trading buying power reserved.
                         logger.warning(
                             f"Deferring stale-entry cancel for {bid} on {ticker}: a partial "
                             f"fill could not be recovered this cycle — retrying next sweep",
@@ -2774,6 +2783,14 @@ class ExecutionEngine:
                                 "ticker": ticker,
                                 "order_id": bid,
                             },
+                        )
+                        await self._record_cancel_failure(
+                            bid,
+                            ticker,
+                            {
+                                "error": "partial-fill recovery unconfirmed; cancel withheld to avoid losing the executed quantity"
+                            },
+                            permanent=False,
                         )
                         continue
 
@@ -3573,9 +3590,38 @@ class ExecutionEngine:
         # own interval; the table was empty because this was never called).
         await self._maybe_snapshot_positions()
 
-    async def _process_single_fill(self, fill: Any) -> None:
-        """Delegates fill processing to FillProcessor."""
+    async def _process_single_fill(self, fill: Any) -> bool:
+        """Delegates fill processing to FillProcessor, then verifies it was
+        actually durably recorded.
+
+        ``FillProcessor.process_single_fill`` catches every internal failure
+        itself (persistence, risk processing) and returns normally — it never
+        raises — so its caller cannot tell success from a silently-swallowed
+        failure without checking independently. This verifies via
+        ``is_fill_processed`` against the exact idempotency marker
+        (``f"{order_id}:{filled_qty}"``) ``FillProcessor`` writes on success.
+        ``poll_fills`` (the other caller) ignores the return value — its
+        existing best-effort semantics are unchanged. Returns True iff the
+        fill is confirmed durably recorded.
+        """
         await self._fill_processor.process_single_fill(fill, self.risk_manager, self._remove_pending_order_compat)
+        order_id = str(fill.get("id", "")) if isinstance(fill, dict) else str(getattr(fill, "id", ""))
+        filled_qty = (
+            float(fill.get("filled_qty") or 0) if isinstance(fill, dict) else float(getattr(fill, "filled_qty", 0) or 0)
+        )
+        fill_marker = f"{order_id}:{filled_qty}"
+        try:
+            return await is_fill_processed(fill_marker)
+        except Exception as e:
+            # is_fill_processed RE-RAISES on its own DB failure (unlike
+            # has_processed_fill_for_order, which fails toward True for a
+            # different caller's double-count concern) — fail toward NOT
+            # confirmed here: an unconfirmed fill must never read as safe.
+            logger.warning(
+                "Could not confirm fill was durably recorded after processing",
+                extra={"event_type": "FILL_PROCESSED_VERIFY_FAILED", "order_id": order_id, "error": str(e)},
+            )
+            return False
 
     async def _recover_missed_fill(self, client: Any, broker_order_id: str, ticker: Any) -> bool:
         """Recover a fill that poll_fills' 200-row window aged out before processing.
@@ -3661,8 +3707,13 @@ class ExecutionEngine:
         redundant ``get_order`` round trip. NEVER raises — the broker payload
         is untrusted input, so ``filled_qty`` is parsed defensively (a
         non-numeric value, or a non-finite one like NaN/inf, is treated as
-        zero rather than raised or fed to the fill processor). Returns True
-        iff a fill was processed.
+        zero rather than raised or fed to the fill processor).
+
+        ``_process_single_fill`` itself verifies the fill was actually
+        durably recorded (not merely that it did not raise —
+        ``FillProcessor.process_single_fill`` catches every internal failure
+        itself and returns normally), so its return value is trusted directly
+        here. Returns True iff the fill is confirmed durably recorded.
         """
         try:
             filled_qty = float(order.get("filled_qty") or 0)
@@ -3683,7 +3734,7 @@ class ExecutionEngine:
             return False
 
         try:
-            await self._process_single_fill(order)
+            recorded = await self._process_single_fill(order)
         except Exception as e:
             logger.warning(
                 "Missed-fill recovery: fill processing failed; cost basis stays unrecovered",
@@ -3692,6 +3743,21 @@ class ExecutionEngine:
                     "order_id": broker_order_id,
                     "ticker": ticker,
                     "error": str(e),
+                },
+            )
+            return False
+        if not recorded:
+            # process_single_fill did not raise, but it also could not
+            # confirm the fill was durably recorded — an internal failure
+            # (persistence, risk processing) was swallowed. Treat exactly
+            # like a raised failure: unrecovered.
+            logger.warning(
+                "Missed-fill recovery: fill processing did not durably record a fill "
+                "(an internal failure was swallowed); cost basis stays unrecovered",
+                extra={
+                    "event_type": "MISSED_FILL_RECOVERY_NOT_RECORDED",
+                    "order_id": broker_order_id,
+                    "ticker": ticker,
                 },
             )
             return False
