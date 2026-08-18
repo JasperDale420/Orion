@@ -2765,8 +2765,16 @@ class ExecutionEngine:
                         # proceed regardless — not flipping would loop the
                         # 2026-06-22 storm forever), this order is still open:
                         # sending the cancel is a mutation WE control, and
-                        # there is no reason to spend it now. Defer to next
-                        # sweep instead of losing this quantity permanently.
+                        # there is no reason to spend it now. Defer instead of
+                        # losing this quantity permanently — routed through the
+                        # SAME backoff/give-up/alert state machine a rejected
+                        # cancel uses, so a recovery that can never succeed
+                        # (e.g. FillProcessor's in-memory partial-fill tracker
+                        # already advanced past this quantity, so a retry can
+                        # never re-attempt the write that failed) still ends
+                        # in a durable operator alert after
+                        # ``_CANCEL_MAX_ATTEMPTS`` instead of looping silently
+                        # forever with the day-trading buying power reserved.
                         logger.warning(
                             f"Deferring stale-entry cancel for {bid} on {ticker}: a partial "
                             f"fill could not be recovered this cycle — retrying next sweep",
@@ -2775,6 +2783,14 @@ class ExecutionEngine:
                                 "ticker": ticker,
                                 "order_id": bid,
                             },
+                        )
+                        await self._record_cancel_failure(
+                            bid,
+                            ticker,
+                            {
+                                "error": "partial-fill recovery unconfirmed; cancel withheld to avoid losing the executed quantity"
+                            },
+                            permanent=False,
                         )
                         continue
 

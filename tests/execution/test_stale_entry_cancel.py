@@ -1198,6 +1198,47 @@ async def test_fallback_observed_partial_fill_recovery_failure_defers_the_cancel
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_repeated_partial_fill_recovery_failure_eventually_gives_up_and_alerts(monkeypatch) -> None:
+    """[high, from adversarial review round 4] A recovery that keeps failing
+    (e.g. FillProcessor's in-memory partial-fill tracker already advanced
+    past this quantity on the first failed attempt, so a retry can never
+    re-attempt the write that failed) must not loop silently forever with
+    the day-trading buying power reserved. It is routed through the SAME
+    backoff/give-up/alert state machine a rejected cancel uses, so it ends in
+    a durable operator alert after _CANCEL_MAX_ATTEMPTS."""
+    clock = _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    sent: list[str] = []
+
+    async def _fake_alert(message, *, dedupe_key=None):
+        sent.append(dedupe_key or message)
+        return True
+
+    monkeypatch.setattr(mod, "send_discord_alert", _fake_alert, raising=False)
+
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock(side_effect=RuntimeError("db write failed"))
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "QQQ"}]
+    )
+    order = {"id": "b-1", "status": "partially_filled", "filled_qty": "2", "qty": "5"}
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[order])
+    client.cancel_order = AsyncMock(return_value={})
+
+    max_attempts = mod.ExecutionEngine._CANCEL_MAX_ATTEMPTS
+    for _ in range(max_attempts + 3):
+        clock[0] += 10_000.0
+        await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()  # the ambiguous mutation is never sent, even after giving up
+    assert ee._cancel_attempts["b-1"].gave_up is True
+    assert len(sent) == 1  # one alert, not one per sweep
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_apply_recovered_fill_rejects_nonnumeric_filled_qty_without_raising() -> None:
     """[medium, from adversarial review round 2] A malformed broker
     filled_qty must never raise out of the 'NEVER raises' recovery helper —
