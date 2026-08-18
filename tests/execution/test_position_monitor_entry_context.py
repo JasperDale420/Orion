@@ -23,9 +23,17 @@ from orion.execution.position_monitor import (
     _expiry_from_occ_symbol,
     _is_occ_option_symbol,
 )
+from orion.ml.exit_classifier import BucketExitClassifier
 from orion.storage.db import async_session_factory
 from orion.storage.models_execution import OrderRecord
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
+
+
+def _classifier_with_all_buckets() -> BucketExitClassifier:
+    """A classifier with a model for every bucket, detached from the singleton."""
+    classifier = BucketExitClassifier()
+    classifier.models = {b: object() for b in ("0DTE", "SHORT_SWING", "SWING", "POSITION")}
+    return classifier
 
 
 @pytest.mark.unit
@@ -117,6 +125,10 @@ async def test_fetch_entry_context_populates_enrichment_fields_for_option_positi
         await session.commit()
 
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
 
     fake_enrichment = {
         "iv_rank_at_entry": 42.5,
@@ -128,7 +140,7 @@ async def test_fetch_entry_context_populates_enrichment_fields_for_option_positi
     }
 
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value=fake_enrichment),
     ) as mock_enrich:
         context = await monitor._fetch_entry_context(option_symbol)
@@ -154,19 +166,16 @@ async def test_fetch_entry_context_populates_enrichment_fields_for_option_positi
     assert context["market_tide_30m"] == -3.4e6
 
     # Enricher called with the expected derived args.
+    # The exit-feature enricher needs only the ticker and the entry timestamp;
+    # the four features ExitFeatures carries are all keyed off those.
     assert mock_enrich.call_count == 1
     call_kwargs = mock_enrich.call_args.kwargs
     assert call_kwargs["ticker"] == ticker
-    assert call_kwargs["put_call"] == "C"
-    assert call_kwargs["dte"] == 14
-    assert call_kwargs["premium_usd"] == 12500.0
-    assert call_kwargs["event_id"] == "evt_test_123"
-    assert call_kwargs["is_sweep"] is True
-    assert call_kwargs["option_chain"] == option_symbol
+    assert call_kwargs["entry_ts"] == context["entry_time"]
 
     # Second call hits the in-memory cache — no extra DB or enricher work.
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value={"iv_rank_at_entry": 999.0}),
     ) as mock_enrich_2:
         cached = await monitor._fetch_entry_context(option_symbol)
@@ -246,6 +255,10 @@ async def test_sync_positions_propagates_entry_context_to_tracked_position() -> 
         await session.commit()
 
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
 
     connector = SimpleNamespace(
         get_all_positions=lambda: [
@@ -267,7 +280,7 @@ async def test_sync_positions_propagates_entry_context_to_tracked_position() -> 
     }
 
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value=fake_enrichment),
     ):
         tracked = await monitor.sync_positions(connector)
@@ -296,12 +309,16 @@ async def test_fetch_entry_context_returns_default_for_unknown_symbol() -> None:
     from datetime import UTC, datetime, timedelta
 
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
     # Expiry far in the future → current DTE > 14 → POSITION bucket.
     far_expiry = (datetime.now(UTC) + timedelta(days=200)).strftime("%y%m%d")
     unknown = f"TSLA{far_expiry}C00300000"
 
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value={}),
     ) as mock_enrich:
         ctx_1 = await monitor._fetch_entry_context(unknown)
@@ -318,9 +335,13 @@ async def test_fetch_entry_context_returns_default_for_unknown_symbol() -> None:
 async def test_fetch_entry_context_swing_default_for_non_occ_symbol() -> None:
     """A non-OCC (equity) symbol has no embedded expiry — falls back to SWING."""
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
 
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value={}),
     ):
         ctx = await monitor._fetch_entry_context("TSLA")
@@ -354,6 +375,10 @@ async def test_entry_context_timeout_derives_bucket_from_occ_and_does_not_cache(
     fallback.
     """
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
     monitor._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 0.01
     today = datetime.now(UTC).strftime("%y%m%d")
     symbol = f"SPY{today}C00500000"
@@ -393,6 +418,10 @@ async def test_entry_context_arriving_after_timeout_is_applied_to_tracked_positi
     """When the retried fetch succeeds, the already-tracked position picks up the
     real context (bucket, entry time, decision id) and keeps its running stats."""
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
     monitor._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 0.01
     today = datetime.now(UTC).strftime("%y%m%d")
     symbol = f"SPY{today}C00500000"

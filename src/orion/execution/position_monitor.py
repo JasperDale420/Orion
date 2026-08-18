@@ -442,6 +442,14 @@ class PositionMonitor:
         # Bumped whenever a position is dropped, so a resolution still running
         # for the closed position cannot cache or apply onto a later reopen.
         self._entry_context_generation: dict[str, int] = {}
+        # When each position was first held back from its exit model for want
+        # of resolved entry context, so a prolonged outage becomes alertable.
+        self._context_deferred_since: dict[str, float] = {}
+        # Symbols already paged for a total barrier-evaluation failure, so a
+        # persistent failure pages once rather than every cycle.
+        self._policy_failure_paged: set[str] = set()
+        # Last time a prolonged deferral was warned about, per symbol.
+        self._context_defer_warned_at: dict[str, float] = {}
         # Enrichment scans are memory-heavy (a single 370-day bars read peaks
         # above 7 GB), so only one runs at a time regardless of position count.
         self._entry_context_semaphore = asyncio.Semaphore(self._ENTRY_CONTEXT_MAX_CONCURRENCY)
@@ -455,6 +463,9 @@ class PositionMonitor:
     # Exponential backoff bounds for a symbol whose resolution raised.
     _ENTRY_CONTEXT_RETRY_BASE_SECONDS = 30.0
     _ENTRY_CONTEXT_RETRY_MAX_SECONDS = 300.0
+    # How long a position may be held back from its exit model before the
+    # deferral is escalated from a debug line to a warning.
+    _CONTEXT_DEFER_ALERT_SECONDS = 300.0
 
     @staticmethod
     def _apply_entry_context(pos: TrackedPosition, entry_context: dict[str, Any]) -> None:
@@ -522,6 +533,25 @@ class PositionMonitor:
         # left uncached so the real context is retried rather than frozen at
         # the fallback for the life of the process (July 2026: 0DTE contracts
         # ran SWING parameters that way).
+        # A context whose enrichment was skipped for want of a model for its
+        # bucket becomes stale the moment that model is loaded: the classifier
+        # would otherwise score an already-open position with its default
+        # substitutes instead of the position's real entry features. Drop those
+        # so they re-resolve below and apply through the late-apply path.
+        for cached_symbol, cached_context in list(self._entry_context_cache.items()):
+            if cached_context.get("enrichment_pending") and self._bucket_has_exit_model(cached_context.get("bucket")):
+                logger.info(
+                    f"Exit model now loaded for {cached_context.get('bucket')}; "
+                    f"re-resolving entry context for {cached_symbol}",
+                    extra={
+                        "event": "entry_context_reresolve_model_loaded",
+                        "symbol": cached_symbol,
+                        "bucket": cached_context.get("bucket"),
+                    },
+                )
+                self._entry_context_cache.pop(cached_symbol, None)
+                self._entry_context_applied.discard(cached_symbol)
+
         uncached = [p.symbol for p in broker_positions if p.symbol not in self._entry_context_cache]
         # This cycle's fallback for symbols still awaiting resolution. Local,
         # never cached: the bucket comes from the contract's own expiry so a
@@ -685,6 +715,63 @@ class PositionMonitor:
 
         return list(self.tracked_positions.values())
 
+    def _note_context_deferral(self, symbol: str, bucket: str) -> None:
+        """Record, and eventually escalate, a position held back from its model.
+
+        Deferral is normally a few seconds while resolution completes. A symbol
+        whose entry context cannot resolve at all (for example a sustained
+        database outage, which backs off to five-minute retries) stays deferred
+        indefinitely: its deterministic barriers still run, but any exit only
+        its model would have found is withheld for as long as that lasts. That
+        is a real reduction in exit coverage, so it is surfaced rather than
+        left silent.
+        """
+        if not self._bucket_has_exit_model(bucket):
+            return
+        now = time.monotonic()
+        started = self._context_deferred_since.setdefault(symbol, now)
+        deferred_for = now - started
+        if deferred_for < self._CONTEXT_DEFER_ALERT_SECONDS:
+            logger.debug(
+                f"Entry context still resolving for {symbol}; barriers only this cycle",
+                extra={"event": "exit_classifier_deferred_context", "symbol": symbol, "bucket": bucket},
+            )
+            return
+        # Repeat at the alert interval, not every cycle, so a long outage is a
+        # steady reminder rather than a flood.
+        last = self._context_defer_warned_at.get(symbol)
+        if last is not None and now - last < self._CONTEXT_DEFER_ALERT_SECONDS:
+            return
+        self._context_defer_warned_at[symbol] = now
+        logger.warning(
+            f"Entry context for {symbol} has been unresolved for {deferred_for:.0f}s; its "
+            f"{bucket} exit model has been withheld that whole time and only the "
+            f"deterministic barriers are running",
+            extra={
+                "event": "exit_classifier_deferred_context_prolonged",
+                "symbol": symbol,
+                "bucket": bucket,
+                "deferred_seconds": round(deferred_for, 1),
+            },
+        )
+
+    def _exit_models_loaded(self) -> bool:
+        """True when any bucket has a trained exit model."""
+        return bool(getattr(self.exit_classifier, "models", None))
+
+    def _bucket_has_exit_model(self, bucket: str | None) -> bool:
+        """True when `bucket` itself has a trained exit model.
+
+        Gates entry-context enrichment. The gate is per-bucket rather than
+        "any model loaded" because `evaluate_exits` consults the classifier
+        only for a position whose OWN bucket has a model: enriching a bucket
+        without one spends a multi-hundred-megabyte lookup on features that
+        reach no consumer, and holds the single resolver permit ahead of a
+        position that can actually use it.
+        """
+        models = getattr(self.exit_classifier, "models", None) or {}
+        return bool(bucket) and bucket in models
+
     async def _await_entry_contexts(self, symbols: list[str]) -> None:
         """Start background entry-context resolution and wait out the budget.
 
@@ -783,6 +870,9 @@ class PositionMonitor:
         self._entry_context_cache.pop(symbol, None)
         self._entry_context_retry_at.pop(symbol, None)
         self._entry_context_backoff_seconds.pop(symbol, None)
+        self._context_deferred_since.pop(symbol, None)
+        self._context_defer_warned_at.pop(symbol, None)
+        self._policy_failure_paged.discard(symbol)
         self._entry_context_applied.discard(symbol)
 
     async def _fetch_entry_context(self, symbol: str) -> dict[str, Any]:
@@ -796,10 +886,12 @@ class PositionMonitor:
 
           - decision_id, entry_time, direction, premium_usd, dte, bucket,
             option_symbol, expiry_date — all directly queryable from the join.
-          - is_sweep, event_id — extracted from ``candidate_trades.evidence``.
+          - is_sweep — extracted from ``candidate_trades.evidence``.
           - iv_rank_at_entry, vix_at_entry, gex_at_entry, market_tide_30m —
-            fetched from the same flow_enricher pipeline the ML scorer uses,
-            so train/inference parity is preserved.
+            fetched from the same flow_enricher helpers the ML scorer uses, so
+            train/inference parity is preserved. Resolved only when a trained
+            exit model is loaded, since these four are the sole entry-context
+            features ``ExitFeatures`` carries and nothing else reads them.
 
         Results are cached per-symbol on the PositionMonitor instance for the
         lifetime of the session — entry-time context is immutable post-entry,
@@ -949,60 +1041,45 @@ class PositionMonitor:
                 evidence = {}
 
         is_sweep = bool(evidence.get("is_sweep")) if isinstance(evidence, dict) else False
-        event_id = evidence.get("event_id") if isinstance(evidence, dict) else None
-        if not event_id and isinstance(evidence, dict):
-            ids = evidence.get("event_ids") or []
-            if isinstance(ids, list) and ids:
-                event_id = ids[0]
-
-        put_call_raw = row.get("option_type") or (evidence.get("put_call") if isinstance(evidence, dict) else None)
-        put_call = "C"
-        if put_call_raw:
-            normalized = str(put_call_raw).upper()
-            put_call = "C" if normalized in {"C", "CALL"} else ("P" if normalized in {"P", "PUT"} else "C")
-
         ticker = row.get("ticker") or symbol
 
         premium_usd = row.get("premium")
         if (premium_usd in (None, 0)) and isinstance(evidence, dict):
             premium_usd = evidence.get("premium_usd") or evidence.get("premium") or premium_usd
 
-        # Enrich with iv_rank / vix / gex / market_tide via the same path
-        # the ML scorer uses, so position-monitor features stay aligned
-        # with training. Failures here are non-fatal: we still return the
-        # DB-derived context and let the exit classifier / fallback rules
-        # cope with None enrichment fields (they already do).
+        # Enrich with iv_rank / vix / gex / market_tide — the only entry-context
+        # features `ExitFeatures` carries — via the same helpers the ML scorer
+        # uses, so position-monitor features stay aligned with training.
+        #
+        # Skipped unless THIS position's bucket has a trained model:
+        # `evaluate_exits` only builds `ExitFeatures` for such a bucket, so
+        # otherwise these fields reach no consumer and the scans behind them are
+        # pure waste (86 Heber reads per position, per resolution). A context
+        # skipped for that reason is flagged so it can be re-resolved if a model
+        # for its bucket is loaded later — otherwise the classifier would score
+        # an already-open position with defaults instead of its real entry
+        # features.
+        #
+        # A failure here is NOT absorbed into a resolved context. The classifier
+        # substitutes defaults for missing entry features, so caching a context
+        # whose enrichment failed would mark the position ready and let an ML
+        # exit fire on fabricated IV/VIX/GEX/tide values. The context is instead
+        # returned uncached, exactly like the DB-error path above, so the retry
+        # and deferral machinery treats the position as still unresolved.
         enrichment: dict[str, Any] = {}
-        if entry_time is not None:
+        enrichment_failed = False
+        enrichment_pending = entry_time is not None and not self._bucket_has_exit_model(bucket)
+        if entry_time is not None and self._bucket_has_exit_model(bucket):
             try:
-                from orion.ml.flow_enricher import enrich_flow_for_scoring
+                from orion.ml.flow_enricher import enrich_flow_for_exit_features
 
-                expiry_str = None
-                if expiration_date is not None:
-                    try:
-                        expiry_str = expiration_date.date().isoformat()
-                    except AttributeError:
-                        expiry_str = str(expiration_date)
-
-                # Offloaded to a worker thread: the enricher fans out to
-                # HeberReader, whose parquet scans are synchronous and can run
-                # for over a minute (a 370-day bars read measured 80s). Awaited
-                # inline they block the whole monitor loop for that duration —
+                # Offloaded to a worker thread: the enricher reaches
+                # HeberReader, whose parquet scans are synchronous. Awaited
+                # inline they block the whole monitor loop for their duration —
                 # exit evaluation included — and make the fetch budget above
                 # unenforceable, because a blocked loop cannot fire its timers.
                 enrichment = await _run_coroutine_in_thread(
-                    enrich_flow_for_scoring(
-                        ticker=ticker,
-                        entry_ts=entry_time,
-                        put_call=put_call,
-                        dte=dte,
-                        premium_usd=float(premium_usd) if premium_usd is not None else None,
-                        event_id=event_id,
-                        option_chain=row.get("option_symbol"),
-                        aggressor=evidence.get("aggressor") if isinstance(evidence, dict) else None,
-                        is_sweep=is_sweep,
-                        expiry=expiry_str,
-                    )
+                    enrich_flow_for_exit_features(ticker=ticker, entry_ts=entry_time)
                 )
             except Exception as e:
                 logger.warning(
@@ -1010,6 +1087,7 @@ class PositionMonitor:
                     extra={"event": "entry_context_enrichment_failed", "symbol": symbol, "error": str(e)},
                 )
                 enrichment = {}
+                enrichment_failed = True
 
         context = {
             "decision_id": row.get("decision_id"),
@@ -1025,7 +1103,15 @@ class PositionMonitor:
             "vix_at_entry": enrichment.get("vix_at_entry"),
             "gex_at_entry": enrichment.get("gex_at_entry"),
             "market_tide_30m": enrichment.get("market_tide_30m"),
+            # Enrichment was deliberately skipped for want of a model for this
+            # bucket; sync_positions re-resolves the context if one appears.
+            "enrichment_pending": enrichment_pending,
         }
+
+        if enrichment_failed:
+            # Uncached: the position stays unresolved, so the classifier is
+            # withheld and the retry/deferral path keeps trying.
+            return context
 
         self._entry_context_cache[symbol] = context
         return context
@@ -1098,20 +1184,40 @@ class PositionMonitor:
                         session_close=session_close,
                     )
                 except Exception as retry_exc:
-                    logger.critical(
-                        f"EXIT_POLICY_EVALUATION_FAILED for {symbol} ({pos.bucket}): default barriers also "
-                        f"raised: {retry_exc}; consulting the exit classifier as last resort",
-                        extra={
-                            "event": "exit_policy_evaluation_failed",
-                            "event_type": "EXIT_POLICY_EVALUATION_FAILED",
-                            "ticker": symbol,
-                            "bucket": pos.bucket,
-                            "error": str(retry_exc),
-                        },
-                        exc_info=True,
-                    )
+                    # One page per symbol, stating the outcome that actually
+                    # applies: the classifier is the last resort only when this
+                    # position's entry context resolved. Logged here rather than
+                    # at both sites so the two cases can't contradict each
+                    # other, and gated on a state transition so a persistent
+                    # failure doesn't page every cycle.
+                    context_resolved = symbol in self._entry_context_applied
+                    if symbol not in self._policy_failure_paged:
+                        self._policy_failure_paged.add(symbol)
+                        outcome = (
+                            "consulting the exit classifier as last resort"
+                            if context_resolved
+                            else "entry context is ALSO unresolved, so the classifier cannot be trusted "
+                            "either — this position has no exit policy this cycle"
+                        )
+                        logger.critical(
+                            f"EXIT_POLICY_EVALUATION_FAILED for {symbol} ({pos.bucket}): default barriers "
+                            f"also raised: {retry_exc}; {outcome}",
+                            extra={
+                                "event": "exit_policy_evaluation_failed",
+                                "event_type": "EXIT_POLICY_EVALUATION_FAILED",
+                                "ticker": symbol,
+                                "bucket": pos.bucket,
+                                "error": str(retry_exc),
+                                "context_resolved": context_resolved,
+                            },
+                            exc_info=True,
+                        )
                     fallback = None
                     policy_evaluated = False
+
+            if policy_evaluated:
+                # Recovered (or never failed): re-arm the page for next time.
+                self._policy_failure_paged.discard(symbol)
 
             if fallback is not None:
                 logger.info(
@@ -1147,6 +1253,31 @@ class PositionMonitor:
             # not consulted — but only when the barriers actually evaluated.
             # If they raised on both attempts, the classifier is the last
             # resort rather than leaving the position with no exit policy.
+            #
+            # The same applies while entry context is still resolving. The
+            # classifier substitutes defaults for missing entry features
+            # (iv_rank 50, vix 20, gex 0, tide 0), so scoring a position
+            # mid-resolution would let an ML exit fire on values it never had.
+            # The deterministic barriers stay in force throughout.
+            # Readiness is an UNCONDITIONAL precondition for the classifier,
+            # checked before the policy_evaluated branch below. Folding it into
+            # that branch would let the barriers-raised path — the one case
+            # where the classifier is the last resort — score the position on
+            # placeholder entry features, which is the worst possible moment
+            # to act on fabricated inputs.
+            context_ready = symbol in self._entry_context_applied
+            if not context_ready:
+                # The barriers-also-failed case is paged once, above, where the
+                # outcome is known — no second, contradicting CRITICAL here.
+                self._note_context_deferral(symbol, pos.bucket)
+                continue
+
+            self._context_deferred_since.pop(symbol, None)
+            self._context_defer_warned_at.pop(symbol, None)
+
+            # No trained model for this bucket: the barriers are the whole
+            # policy. Skipped only when they actually evaluated; if they raised
+            # on both attempts the classifier is the last resort.
             if policy_evaluated and pos.bucket not in self.exit_classifier.models:
                 continue
 
@@ -1592,6 +1723,14 @@ async def run_position_monitor_loop(
             "has_execution_engine": execution_engine is not None,
         },
     )
+
+    if not monitor._exit_models_loaded():
+        logger.info(
+            "No trained exit model is loaded, so entry-context enrichment is disabled — "
+            "its features feed only the exit classifier. Buckets, expiries and the "
+            "deterministic barriers are unaffected.",
+            extra={"event": "entry_context_enrichment_disabled_no_exit_models"},
+        )
 
     while True:
         try:
