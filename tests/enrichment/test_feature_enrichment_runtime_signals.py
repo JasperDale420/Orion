@@ -482,6 +482,8 @@ async def test_persist_regime_snapshot_avoids_local_db_write(monkeypatch: pytest
         session=SimpleNamespace(value="regular"),
         vix_regime=SimpleNamespace(value="normal"),
         vix_level=18.2,
+        vix_source=None,
+        vix_observed_at=None,
         realized_vol=0.21,
         trend_strength=0.33,
         risk_score=0.45,

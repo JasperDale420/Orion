@@ -455,8 +455,14 @@ class SystemSettings(BaseSettings):
     execution_prefer_heber_recent_flow: bool = Field(
         default=True, validation_alias="ORION_EXECUTION_PREFER_HEBER_RECENT_FLOW"
     )
+    # Defaults false (unlike this file's other feature-enrichment prefer_heber
+    # flags): docker-compose already defaults this to false, but that's a
+    # belt-and-suspenders match, not the source of truth — a raw/non-compose
+    # launch must not silently re-enable it. See 2026-08-18 incident:
+    # RegimeGate had no way to distinguish this flag's proxy vix source from
+    # a trusted one, and enabling it hard-blocked all trading market-wide.
     feature_enrichment_prefer_heber_context: bool = Field(
-        default=True, validation_alias="ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT"
+        default=False, validation_alias="ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT"
     )
     feature_enrichment_enable_gateway_fetch: bool = Field(
         default=False, validation_alias="ORION_FEATURE_ENRICHMENT_ENABLE_GATEWAY_FETCH"

@@ -62,6 +62,11 @@ async def test_get_latest_vix_data_prefers_heber(monkeypatch: pytest.MonkeyPatch
     assert vix_data["vix"] == pytest.approx(24.0)
     assert vix_data["vix_1d_change"] == pytest.approx(20.0)
     assert vix_data["vix_regime"] == "ELEVATED"
+    # This is an ETF-price proxy, not a real spot-VIX print — downstream
+    # (RegimeGate) must be able to tell the two apart before hard-blocking
+    # trading on it. See 2026-08-18 adversarial review finding.
+    assert vix_data["vix_source"] == "proxy:VIXY"
+    assert vix_data["vix_observed_at"] == now - timedelta(minutes=1)
 
 
 @pytest.mark.asyncio

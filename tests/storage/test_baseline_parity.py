@@ -141,6 +141,10 @@ def test_baseline_creates_every_metadata_table() -> None:
         # b6_risk_daily_loss_date.py — trading date the persisted daily loss
         # belongs to (NULL = written before the column existed).
         "risk_state": {"accounting_version", "daily_loss_date"},
+        # b7_regime_vix_source.py — provenance of vix_level (proxy vs trusted
+        # spot-VIX source) and the underlying observation's own timestamp
+        # (NULL = written before the column existed, treated as untrusted/stale).
+        "regime_snapshots": {"vix_source", "vix_observed_at"},
     }
 
     # Column-level parity (adversarial-review finding: table-name-only parity
