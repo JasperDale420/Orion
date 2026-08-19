@@ -157,6 +157,61 @@ def test_read_bars_prunes_partitions_before_start_time(tmp_path: Path, monkeypat
     assert float(result.iloc[0]["close"]) == 100.0
 
 
+def test_read_bars_does_not_open_other_instrument_types_in_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A bounded equity read must never open same-day files under a different
+    ``instrument_type=`` partition.
+
+    Date-based pruning (``min_dt``) narrows the *set of dates* opened but still
+    walks every ``instrument_type=`` subtree for those dates. The crypto bars
+    partition accumulates thousands of tiny uncompacted per-write files per
+    day (unlike equity's compacted daily files), so an 11-ticker equity
+    hydration pass opened ~9k crypto files it could never match, driving a
+    single ticker's read from milliseconds to seconds and hundreds of MB of
+    RSS. See heber_data_bloat_20260818 in CHANGELOG for measured numbers.
+    """
+    now = datetime(2026, 8, 18, 14, 0, tzinfo=UTC)
+    yesterday = now - timedelta(days=1)
+    feed_root = tmp_path / "silver" / "feed=bars"
+    equity_file = feed_root / "instrument_type=equity" / f"dt={now.date().isoformat()}" / "part-0.parquet"
+    _write_parquet(equity_file, _bars_frame(now - timedelta(minutes=5), 100.0))
+
+    # Same-day crypto partition: same dt=, different instrument_type=. Never
+    # matches an equity instrument_key filter, but min_dt alone can't exclude it.
+    crypto_frame = pd.DataFrame(
+        {
+            "instrument_key": ["crypto:BTCUSD"],
+            "bar_start_ts": [now - timedelta(minutes=5)],
+            "ts_available": [now - timedelta(minutes=5)],
+            "open": [50000.0],
+            "high": [50100.0],
+            "low": [49900.0],
+            "close": [50050.0],
+            "volume": [1],
+        }
+    )
+    crypto_file = feed_root / "instrument_type=crypto" / f"dt={now.date().isoformat()}" / "part-0.parquet"
+    _write_parquet(crypto_file, crypto_frame)
+
+    opened: list[str] = []
+    real_read_table = pq.read_table
+
+    def _spy(source, **kwargs):  # type: ignore[no-untyped-def]
+        opened.extend(source if isinstance(source, list) else [str(source)])
+        return real_read_table(source, **kwargs)
+
+    monkeypatch.setattr("orion.clients.heber_reader.pq.read_table", _spy)
+
+    reader = HeberReader(data_root=tmp_path)
+    result = reader.read_bars(symbols=["AAPL"], asof_time=now, start_time=yesterday, end_time=now)
+
+    assert str(crypto_file) not in opened, "same-day file under a different instrument_type= was opened"
+    assert str(equity_file) in opened
+    assert len(result) == 1
+    assert float(result.iloc[0]["close"]) == 100.0
+
+
 def test_read_bars_without_start_time_reads_all_partitions(tmp_path: Path) -> None:
     """No start_time means no pruning — full-history callers keep every partition."""
     now = datetime(2026, 8, 16, 14, 0, tzinfo=UTC)
