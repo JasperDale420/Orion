@@ -66,26 +66,35 @@ async def is_fill_processed(order_id: str) -> bool:
         raise
 
 
+async def mark_fill_processed_in_session(
+    session: Any, order_id: str, client_oid: str | None = None, ticker: str | None = None, qty: float | None = None
+) -> None:
+    """``mark_fill_processed``'s write, against a session the caller owns and commits.
+
+    Used by ``FillProcessor`` to land the processed-fill marker in the SAME
+    transaction as the fill row and the risk-state update, so the marker can
+    never durably commit without the risk update also having landed (or vice
+    versa) — see ``fill_processor.process_single_fill``.
+    """
+    from orion.storage.models_risk import ProcessedFill
+
+    pf = ProcessedFill(
+        fill_id=order_id,
+        client_order_id=client_oid,
+        ticker=ticker,
+        qty=qty,
+        processed_at_utc=datetime.now(UTC),
+    )
+    session.add(pf)
+
+
 @db_retry
 async def mark_fill_processed(
     order_id: str, client_oid: str | None = None, ticker: str | None = None, qty: float | None = None
 ) -> None:
-    """Mark a fill as processed (idempotency record)."""
-
-    async def mark_fill(session: Any) -> None:
-        from orion.storage.models_risk import ProcessedFill
-
-        pf = ProcessedFill(
-            fill_id=order_id,
-            client_order_id=client_oid,
-            ticker=ticker,
-            qty=qty,
-            processed_at_utc=datetime.now(UTC),
-        )
-        session.add(pf)
-
+    """Mark a fill as processed (idempotency record) in its own transaction."""
     try:
-        await db_write(mark_fill)
+        await db_write(lambda session: mark_fill_processed_in_session(session, order_id, client_oid, ticker, qty))
     except Exception as e:
         logger.error(f"Failed to mark fill {order_id} as processed: {e}", exc_info=True)
         raise
@@ -407,75 +416,81 @@ async def persist_order_status_update(
         return 0
 
 
-@db_retry
-async def persist_fill_record(fill: Any) -> None:
-    """Persist a fill record and update the trade journal."""
+async def persist_fill_record_in_session(session: Any, fill: Any) -> None:
+    """``persist_fill_record``'s write, against a session the caller owns and commits.
 
-    async def save_fill_and_update_journal(session: Any) -> None:
-        from orion.storage.models_execution import FillRecord
+    Used by ``FillProcessor`` to land the fill row in the SAME transaction as
+    the processed-fill marker and the risk-state update — see
+    ``fill_processor.process_single_fill``.
+    """
+    from orion.storage.models_execution import FillRecord
 
-        if isinstance(fill, dict):
-            broker_order_id = str(fill.get("id", ""))
-            ticker = fill.get("symbol", "")
-            client_oid = fill.get("client_order_id")
-            qty = float(fill.get("filled_qty", 0) or 0)
-            price = float(fill.get("filled_avg_price", 0) or 0)
-            side = fill.get("side") or None
-            filled_at = _coerce_timestamp(fill.get("filled_at") or fill.get("filled_at_utc"))
-            raw = fill
-        else:
-            broker_order_id = str(getattr(fill, "id", ""))
-            ticker = getattr(fill, "symbol", None) or ""
-            client_oid = getattr(fill, "client_order_id", None)
-            qty = float(getattr(fill, "filled_qty", 0) or 0)
-            price = float(getattr(fill, "filled_avg_price", 0) or 0)
-            side = str(getattr(fill, "side", "")) or None
-            filled_at = _coerce_timestamp(getattr(fill, "filled_at", None) or getattr(fill, "filled_at_utc", None))
-            raw = fill.model_dump(mode="json") if hasattr(fill, "model_dump") else {}
+    if isinstance(fill, dict):
+        broker_order_id = str(fill.get("id", ""))
+        ticker = fill.get("symbol", "")
+        client_oid = fill.get("client_order_id")
+        qty = float(fill.get("filled_qty", 0) or 0)
+        price = float(fill.get("filled_avg_price", 0) or 0)
+        side = fill.get("side") or None
+        filled_at = _coerce_timestamp(fill.get("filled_at") or fill.get("filled_at_utc"))
+        raw = fill
+    else:
+        broker_order_id = str(getattr(fill, "id", ""))
+        ticker = getattr(fill, "symbol", None) or ""
+        client_oid = getattr(fill, "client_order_id", None)
+        qty = float(getattr(fill, "filled_qty", 0) or 0)
+        price = float(getattr(fill, "filled_avg_price", 0) or 0)
+        side = str(getattr(fill, "side", "")) or None
+        filled_at = _coerce_timestamp(getattr(fill, "filled_at", None) or getattr(fill, "filled_at_utc", None))
+        raw = fill.model_dump(mode="json") if hasattr(fill, "model_dump") else {}
 
-        stmt = select(FillRecord).where(FillRecord.broker_order_id == broker_order_id)
-        existing = (await session.execute(stmt)).scalars().first()
+    stmt = select(FillRecord).where(FillRecord.broker_order_id == broker_order_id)
+    existing = (await session.execute(stmt)).scalars().first()
+    if existing:
+        existing.ticker = ticker
+        existing.client_order_id = str(client_oid) if client_oid else None
+        existing.filled_qty = qty
+        existing.filled_avg_price = price or None
+        existing.side = side
+        existing.filled_at_utc = filled_at
+        existing.raw_json = raw
+    else:
+        session.add(
+            FillRecord(
+                id=str(uuid.uuid4()),
+                ticker=ticker,
+                broker_order_id=broker_order_id,
+                client_order_id=str(client_oid) if client_oid else None,
+                filled_qty=qty,
+                filled_avg_price=price or None,
+                side=side,
+                filled_at_utc=filled_at,
+                raw_json=raw,
+            )
+        )
+
+    # PRD SS12.4: Update trade journal fill pointers by broker_order_id.
+    try:
+        from orion.storage.models_trade_journal import TradeJournalEntry
+
+        tj_stmt = select(TradeJournalEntry).where(TradeJournalEntry.broker_order_id == broker_order_id).limit(1)
+        existing = (await session.execute(tj_stmt)).scalars().first()
         if existing:
-            existing.ticker = ticker
-            existing.client_order_id = str(client_oid) if client_oid else None
             existing.filled_qty = qty
             existing.filled_avg_price = price or None
-            existing.side = side
             existing.filled_at_utc = filled_at
-            existing.raw_json = raw
-        else:
-            session.add(
-                FillRecord(
-                    id=str(uuid.uuid4()),
-                    ticker=ticker,
-                    broker_order_id=broker_order_id,
-                    client_order_id=str(client_oid) if client_oid else None,
-                    filled_qty=qty,
-                    filled_avg_price=price or None,
-                    side=side,
-                    filled_at_utc=filled_at,
-                    raw_json=raw,
-                )
-            )
+    except Exception as e:
+        logger.error(
+            "Failed to update trade journal on fill persist",
+            extra={"event_type": "TRADE_JOURNAL_FILL_UPDATE_ERROR", "error": str(e)},
+        )
 
-        # PRD SS12.4: Update trade journal fill pointers by broker_order_id.
-        try:
-            from orion.storage.models_trade_journal import TradeJournalEntry
 
-            tj_stmt = select(TradeJournalEntry).where(TradeJournalEntry.broker_order_id == broker_order_id).limit(1)
-            existing = (await session.execute(tj_stmt)).scalars().first()
-            if existing:
-                existing.filled_qty = qty
-                existing.filled_avg_price = price or None
-                existing.filled_at_utc = filled_at
-        except Exception as e:
-            logger.error(
-                "Failed to update trade journal on fill persist",
-                extra={"event_type": "TRADE_JOURNAL_FILL_UPDATE_ERROR", "error": str(e)},
-            )
-
+@db_retry
+async def persist_fill_record(fill: Any) -> None:
+    """Persist a fill record and update the trade journal, in its own transaction."""
     try:
-        await db_write(save_fill_and_update_journal)
+        await db_write(lambda session: persist_fill_record_in_session(session, fill))
     except Exception as e:
         logger.error(
             "Failed to persist fill record",
