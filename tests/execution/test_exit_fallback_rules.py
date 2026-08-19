@@ -115,36 +115,250 @@ def test_disaster_valve_does_not_trigger_above_threshold():
 # --- TimeToExpiryRule -------------------------------------------------------
 
 
-def test_time_to_expiry_triggers_when_dte_below_min():
-    rule = TimeToExpiryRule(min_dte=1)
-    pos = _make_position(
-        expiry_date=datetime.now(UTC) + timedelta(hours=20),  # ~0 DTE
+def _midnight_utc(year: int, month: int, day: int) -> datetime:
+    """An expiry as stored: midnight UTC of the contract's calendar date."""
+    return datetime(year, month, day, tzinfo=UTC)
+
+
+def _frozen_now(moment_utc: datetime):
+    """Patch context freezing `datetime.now` in the rules module at `moment_utc`."""
+    return patch(
+        "orion.execution.exit_fallback_rules.datetime",
+        **{"now.side_effect": lambda tz=None: moment_utc.astimezone(tz or UTC)},
     )
-    sig = rule.should_exit(pos)
+
+
+def test_time_to_expiry_quiet_on_a_legitimate_one_dte_short_swing():
+    """REGRESSION (2026-08-18): a 1-DTE SHORT_SWING dumped minutes after entry.
+
+    `rule_short_swing_v2` admits 1-3 calendar DTE, so a Wednesday-expiring
+    contract bought Tuesday is a legitimate entry. The old wall-clock
+    subtraction saw "0.43 days <= min_dte=1" and exited on the next monitor
+    cycle, paying the spread for nothing (5 positions, -$83 realized).
+    """
+    rule = TimeToExpiryRule(min_dte=1)
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 8, 19))
+    with _frozen_now(datetime(2026, 8, 18, 13, 43, tzinfo=UTC)):  # Tue 09:43 ET
+        assert rule.should_exit(pos) is None
+
+
+def test_time_to_expiry_fires_on_expiry_day_for_short_swing():
+    """min_dte=1 means the position must be out before expiry day ends."""
+    rule = TimeToExpiryRule(min_dte=1)
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 8, 19))
+    with _frozen_now(datetime(2026, 8, 19, 13, 35, tzinfo=UTC)):  # Wed 09:35 ET
+        sig = rule.should_exit(pos)
     assert sig is not None
     assert sig.urgency == "IMMEDIATE"
+    assert sig.reason == "time to expiry: dte=0 < min_dte=1"
 
 
-def test_time_to_expiry_does_not_trigger_when_dte_above_min():
+def test_time_to_expiry_quiet_for_swing_at_two_dte():
+    """SWING min_dte=2: two calendar days left is still inside the floor."""
+    rule = TimeToExpiryRule(min_dte=2)
+    pos = _make_position(bucket="SWING", expiry_date=_midnight_utc(2026, 8, 21))
+    with _frozen_now(datetime(2026, 8, 19, 17, 0, tzinfo=UTC)):  # Wed 13:00 ET
+        assert rule.should_exit(pos) is None
+
+
+def test_time_to_expiry_fires_for_swing_at_one_dte():
+    rule = TimeToExpiryRule(min_dte=2)
+    pos = _make_position(bucket="SWING", expiry_date=_midnight_utc(2026, 8, 21))
+    with _frozen_now(datetime(2026, 8, 20, 17, 0, tzinfo=UTC)):  # Thu 13:00 ET
+        sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.reason == "time to expiry: dte=1 < min_dte=2"
+
+
+def test_time_to_expiry_fires_on_a_stale_past_expiry():
+    """A row still tracked after expiry must not be left without a time stop."""
     rule = TimeToExpiryRule(min_dte=1)
-    pos = _make_position(
-        expiry_date=datetime.now(UTC) + timedelta(days=5),
-    )
-    assert rule.should_exit(pos) is None
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 8, 19))
+    with _frozen_now(datetime(2026, 8, 20, 17, 0, tzinfo=UTC)):
+        sig = rule.should_exit(pos)
+    assert sig is not None
+    assert sig.reason == "time to expiry: dte=-1 < min_dte=1"
 
 
 def test_time_to_expiry_disabled_when_min_zero():
+    """0DTE sets min_dte=0; `flatten_after_et` is that bucket's deadline."""
     rule = TimeToExpiryRule(min_dte=0)
-    pos = _make_position(
-        expiry_date=datetime.now(UTC) + timedelta(hours=1),
-    )
-    assert rule.should_exit(pos) is None
+    pos = _make_position(bucket="0DTE", expiry_date=_midnight_utc(2026, 8, 18))
+    with _frozen_now(datetime(2026, 8, 18, 13, 43, tzinfo=UTC)):
+        assert rule.should_exit(pos) is None
 
 
 def test_time_to_expiry_handles_missing_expiry_gracefully():
     rule = TimeToExpiryRule(min_dte=1)
     pos = _make_position(expiry_date=None)
     assert rule.should_exit(pos) is None  # can't evaluate, don't fire
+
+
+def test_time_to_expiry_treats_naive_expiry_as_utc():
+    rule = TimeToExpiryRule(min_dte=1)
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=datetime(2026, 8, 19))
+    with _frozen_now(datetime(2026, 8, 18, 13, 43, tzinfo=UTC)):
+        assert rule.should_exit(pos) is None
+
+
+def test_time_to_expiry_counts_days_from_the_new_york_date_not_utc():
+    """00:30 UTC Wednesday is still Tuesday evening in New York.
+
+    Counting from the UTC date would roll the day over at 20:00 ET and fire
+    the time stop overnight, a session early.
+    """
+    rule = TimeToExpiryRule(min_dte=1)
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 8, 19))
+    with _frozen_now(datetime(2026, 8, 19, 0, 30, tzinfo=UTC)):  # Tue 20:30 ET
+        assert rule.should_exit(pos) is None
+
+
+def test_time_to_expiry_new_york_date_holds_across_the_dst_boundary():
+    """EST (UTC-5) after the November rollback, EDT (UTC-4) before it.
+
+    2026-11-02T00:30Z is 2026-11-01 19:30 EST; 2026-08-19T00:30Z is
+    2026-08-18 20:30 EDT. Both are the PRIOR New York day, so a contract
+    expiring on the UTC date must still read as 1 DTE in either regime.
+    """
+    rule = TimeToExpiryRule(min_dte=1)
+    winter = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 11, 2))
+    with _frozen_now(datetime(2026, 11, 2, 0, 30, tzinfo=UTC)):
+        assert rule.should_exit(winter) is None
+    summer = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 8, 19))
+    with _frozen_now(datetime(2026, 8, 19, 0, 30, tzinfo=UTC)):
+        assert rule.should_exit(summer) is None
+
+
+def test_time_to_expiry_fires_on_the_last_session_when_expiry_is_a_holiday():
+    """A closed expiry date must not swallow the last session the position can exit on.
+
+    Every listed contract expires on a session, so this is normally a no-op.
+    But counting to a date the exchange is shut on would leave min_dte=1 firing
+    for the first time on a day `close_position` cannot submit — and the next
+    evaluation is already past expiry. Good Friday 2027-03-26 is not an XNYS
+    session, so Thursday 2027-03-25 is the deadline.
+    """
+    rule = TimeToExpiryRule(min_dte=1)
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2027, 3, 26))
+    with _frozen_now(datetime(2027, 3, 25, 17, 0, tzinfo=UTC)):  # Thu 13:00 ET
+        sig = rule.should_exit(pos)
+    assert sig is not None, "must fire on the last open session before a closed expiry"
+    assert sig.reason == "time to expiry: dte=0 < min_dte=1"
+
+
+def test_time_to_expiry_quiet_a_session_before_a_holiday_expiry():
+    """The holiday snap must not fire a whole session early either."""
+    rule = TimeToExpiryRule(min_dte=1)
+    pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2027, 3, 26))
+    with _frozen_now(datetime(2027, 3, 24, 17, 0, tzinfo=UTC)):  # Wed 13:00 ET
+        assert rule.should_exit(pos) is None
+
+
+def test_time_to_expiry_survives_an_unavailable_exchange_calendar():
+    """A dead calendar must never make the time stop unevaluable.
+
+    A failed exchange-calendar init has already blocked every option exit once
+    (MarketSchedule, 2026-08). This rule degrades to a weekday deadline —
+    correct for the listed contracts that make up all real traffic — instead of
+    raising into the barrier evaluation.
+    """
+    import orion.execution.exit_fallback_rules as efr
+
+    efr._cached_session_on_or_before.cache_clear()
+    try:
+        with patch.object(efr, "_xnys_session_on_or_before", side_effect=RuntimeError("calendar down")):
+            rule = TimeToExpiryRule(min_dte=1)
+            pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 8, 19))
+            with _frozen_now(datetime(2026, 8, 18, 13, 43, tzinfo=UTC)):
+                assert rule.should_exit(pos) is None
+            with _frozen_now(datetime(2026, 8, 19, 13, 43, tzinfo=UTC)):
+                assert rule.should_exit(pos) is not None
+    finally:
+        efr._cached_session_on_or_before.cache_clear()
+
+
+def test_time_to_expiry_retries_the_calendar_after_a_transient_outage():
+    """A failed lookup must never be cached as if it were an answer.
+
+    Caching the fail-soft result would freeze the raw expiry in place for the
+    life of the process: a Good-Friday expiry first evaluated during a calendar
+    blip would still read dte=1 on Thursday, stay quiet, and reach expiry
+    unexited even though the calendar recovered hours earlier.
+    """
+    import orion.execution.exit_fallback_rules as efr
+
+    efr._cached_session_on_or_before.cache_clear()
+    try:
+        rule = TimeToExpiryRule(min_dte=1)
+        pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2027, 3, 26))  # Good Friday
+        with patch.object(efr, "_xnys_session_on_or_before", side_effect=RuntimeError("calendar down")):
+            with _frozen_now(datetime(2027, 3, 24, 17, 0, tzinfo=UTC)):  # Wed, during the outage
+                assert rule.should_exit(pos) is None
+        # Calendar recovers; Thursday is the last open session and must fire.
+        with _frozen_now(datetime(2027, 3, 25, 17, 0, tzinfo=UTC)):
+            sig = rule.should_exit(pos)
+        assert sig is not None, "a recovered calendar must be consulted, not a cached outage result"
+        assert sig.reason == "time to expiry: dte=0 < min_dte=1"
+    finally:
+        efr._cached_session_on_or_before.cache_clear()
+
+
+def test_time_to_expiry_outage_fallback_still_backs_off_a_weekend():
+    """With no calendar, a weekend expiry still resolves to a tradeable Friday.
+
+    The calendar is required to know about holidays, but not to know that
+    Saturday is shut — so the degraded path keeps at least that much of the
+    guarantee instead of parking the deadline on a closed day.
+    """
+    import orion.execution.exit_fallback_rules as efr
+
+    efr._cached_session_on_or_before.cache_clear()
+    try:
+        with patch.object(efr, "_xnys_session_on_or_before", side_effect=RuntimeError("calendar down")):
+            rule = TimeToExpiryRule(min_dte=1)
+            pos = _make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 8, 22))  # a Saturday
+            with _frozen_now(datetime(2026, 8, 21, 17, 0, tzinfo=UTC)):  # Fri 13:00 ET
+                sig = rule.should_exit(pos)
+        assert sig is not None, "Friday is the last tradeable day for a Saturday-dated expiry"
+        assert sig.reason == "time to expiry: dte=0 < min_dte=1"
+    finally:
+        efr._cached_session_on_or_before.cache_clear()
+
+
+def test_calendar_outage_alerts_once_on_transition_and_once_on_recovery():
+    """An outage must page once, not once per position per cycle.
+
+    The monitor evaluates every tracked position on every cycle, so logging the
+    degradation per lookup would emit an unbounded stream of identical errors
+    during exactly the incident an operator needs to read the log through.
+    """
+    import orion.execution.exit_fallback_rules as efr
+
+    efr._cached_session_on_or_before.cache_clear()
+    efr._calendar_degraded = False
+    try:
+        rule = TimeToExpiryRule(min_dte=1)
+        positions = [_make_position(bucket="SHORT_SWING", expiry_date=_midnight_utc(2026, 8, d)) for d in (19, 20, 21)]
+        with patch.object(efr, "logger") as mock_log:
+            with patch.object(efr, "_xnys_session_on_or_before", side_effect=RuntimeError("calendar down")):
+                with _frozen_now(datetime(2026, 8, 18, 13, 43, tzinfo=UTC)):
+                    for _ in range(4):
+                        for pos in positions:
+                            rule.should_exit(pos)
+            assert mock_log.error.call_count == 1, (
+                f"12 degraded lookups must page once, not {mock_log.error.call_count} times"
+            )
+            assert mock_log.info.call_count == 0
+            # Calendar recovers: exactly one recovery event, then silence.
+            with _frozen_now(datetime(2026, 8, 18, 13, 43, tzinfo=UTC)):
+                for _ in range(3):
+                    for pos in positions:
+                        rule.should_exit(pos)
+            assert mock_log.info.call_count == 1, "recovery must be announced exactly once"
+            assert mock_log.error.call_count == 1
+    finally:
+        efr._cached_session_on_or_before.cache_clear()
+        efr._calendar_degraded = False
 
 
 # --- ZeroDTEFlattenRule -----------------------------------------------------
@@ -514,14 +728,20 @@ def test_disaster_valve_beats_stop_loss():
 
 
 def test_dte_beats_drawdown_when_both_fire():
-    """DTE has priority over drawdown — both trigger here; DTE wins."""
+    """DTE has priority over drawdown — both trigger here; DTE wins.
+
+    Evaluated at 13:00 ET on the contract's expiry day, before the 15:45 ET
+    flatten cutoff, so the DTE rule is the first hard deadline to fire.
+    """
+    now = datetime(2026, 8, 19, 17, 0, tzinfo=UTC)  # Wed 13:00 ET
     pos = _make_position(
         return_pct=0.50,  # +50%, not enough for profit target
         max_return_pct=2.00,  # +200% peak → retracement = 0.75
-        expiry_date=datetime.now(UTC) + timedelta(hours=12),  # ~0 DTE
-        entry_time=datetime.now(UTC) - timedelta(hours=2),
+        expiry_date=_midnight_utc(2026, 8, 19),  # 0 DTE
+        entry_time=now - timedelta(hours=2),
     )
-    sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
+    with _frozen_now(now):
+        sig = evaluate_fallback_rules(pos, params=_TEST_PARAMS)
     assert sig is not None
     assert sig.rule_id == "time_to_expiry_v1"
 
