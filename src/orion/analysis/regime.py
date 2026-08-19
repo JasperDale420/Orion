@@ -59,6 +59,20 @@ class VIXRegime(str, enum.Enum):
     EXTREME = "extreme"  # > 30
 
 
+# Sources allowed to back a hard SHOCK trading block. Everything else
+# (including a VIXY/UVIX/VIXM ETF-price proxy, or no source at all) can
+# still classify as SHOCK for visibility, but must not be trusted to halt
+# trading on its own — see 2026-08-18 adversarial review of the
+# ORION_FEATURE_ENRICHMENT_PREFER_HEBER_CONTEXT rollout. No source in this
+# codebase currently qualifies; hard SHOCK blocks are inert until one does.
+TRUSTED_VIX_SOURCES = frozenset({"spot_vix"})
+
+
+def is_trusted_vix_source(source: str | None) -> bool:
+    """Whether a vix reading's source is trustworthy enough to hard-block trading on."""
+    return source in TRUSTED_VIX_SOURCES
+
+
 @dataclass(frozen=True)
 class MarketRegimeSnapshot:
     """Complete multi-axis regime state at a point in time."""
@@ -74,6 +88,14 @@ class MarketRegimeSnapshot:
 
     # Continuous features
     vix_level: float | None = None
+    # Provenance of vix_level — e.g. "proxy:VIXY" or a trusted "spot_vix".
+    # See is_trusted_vix_source(); consumers must check this before treating
+    # a SHOCK/EXTREME reading as ground truth.
+    vix_source: str | None = None
+    # Timestamp of the underlying vix observation itself (e.g. the VIXY bar's
+    # own bar time), distinct from `ts` — a snapshot can be rewritten every
+    # cycle while replaying the same stale observation.
+    vix_observed_at: datetime | None = None
     realized_vol: float | None = None
     trend_strength: float | None = None
     risk_score: float | None = None
@@ -202,6 +224,8 @@ class MultiAxisRegimeDetector:
         realized_vol: float = 0.015,
         vix: float | None = None,
         vix_1d_change: float | None = None,
+        vix_source: str | None = None,
+        vix_observed_at: datetime | None = None,
         market_tide_net: float | None = None,
     ) -> MarketRegimeSnapshot:
         """Detect full multi-axis regime snapshot."""
@@ -215,6 +239,8 @@ class MultiAxisRegimeDetector:
             session=self.detect_session(ts),
             vix_regime=self.classify_vix_regime(vix),
             vix_level=vix,
+            vix_source=vix_source,
+            vix_observed_at=vix_observed_at,
             realized_vol=realized_vol,
             trend_strength=trend_strength,
             risk_score=None,

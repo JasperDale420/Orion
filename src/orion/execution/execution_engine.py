@@ -1065,6 +1065,48 @@ class ExecutionEngine:
         if asyncio.iscoroutine(maybe_result):
             await maybe_result
 
+    @staticmethod
+    def _validated_regime_multiplier(execution_params: dict[str, Any]) -> float | None:
+        """Read regime_size_multiplier as a reduction-only sizing factor.
+
+        A key that is simply ABSENT means no regime data was computed for
+        this decision (mirrors PipelineContext's own 1.0 default) and is not
+        an error — defaults to 1.0, unmultiplied. A key that IS present but
+        non-numeric, non-finite, or negative is a different, worse failure:
+        execution_params round-trips through DB persistence as untyped JSON,
+        and the signal pipeline never itself produces such a value, so its
+        presence means something already went wrong upstream. Unlike
+        RegimeGate's own "no input yet" fallback (which never had a real
+        computed value to lose), this engine cannot tell whether a malformed
+        value here erased an intended adverse (risk-reducing) reading —
+        defaulting it to 1.0 could silently restore full-size exposure
+        exactly when a real regime signal called for less. Returns None in
+        that case so the caller skips the order instead of guessing.
+
+        A valid multiplier is clamped to a ceiling of 1.0 regardless of what
+        a favorable regime combination computes — regime sizing may only
+        reduce risk, never license a bigger trade than the operator
+        configured (config allows combined multipliers above 1.0, e.g. LOW
+        vol/RISK_ON/LOW vix all at once). A valid 0.0 passes through
+        unchanged — it results in the pre-existing zero-contracts skip, not
+        this validation failure.
+        """
+        if "regime_size_multiplier" not in execution_params:
+            return 1.0
+        raw = execution_params["regime_size_multiplier"]
+        # bool is a subtype of int in Python — float(True) == 1.0 would
+        # otherwise pass every check below as a "valid" full-size multiplier
+        # instead of the type-contract violation it actually is.
+        if isinstance(raw, bool):
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(value) or value < 0:
+            return None
+        return min(value, 1.0)
+
     async def _execute_options_order(self, decision: StrategyDecision, candidate: CandidateTrade) -> None:
         """Execute an options order via Data Gateway."""
 
@@ -1308,19 +1350,42 @@ class ExecutionEngine:
 
         # Sizing: fixed premium debit per trade (uniform trade weights for the
         # measurement loop) with solver risk_per_trade_bps as the fallback and
-        # max_option_premium_pct as the safety ceiling either way.
+        # max_option_premium_pct as the safety ceiling either way. Whichever
+        # base a branch picks is capped at the ceiling FIRST, then regime_mult
+        # (RegimeGate's combined sizing multiplier) scales what remains — so a
+        # misconfigured base above the ceiling still yields the more
+        # conservative of the two possible orderings, and a favorable regime
+        # can reduce risk toward (never past) the ceiling but never restore
+        # more than the operator-configured base. Previously applied only in
+        # the risk_bps branch, silently ignored in the other two (2026-08-18
+        # adversarial review) — fixed_premium_per_trade is what's actually
+        # deployed live, so every regime (SHOCK, RISK_OFF, etc.) sized
+        # identically until now.
         ep = decision.execution_params or {}
+        # Validated before risk_bps is converted below (which has no such
+        # guard) so an invalid multiplier always reaches this skip path,
+        # even if risk_per_trade_bps happens to be malformed too.
+        regime_mult = self._validated_regime_multiplier(ep)
+        if regime_mult is None:
+            logger.error(
+                "invalid_regime_size_multiplier",
+                ticker=candidate.ticker,
+                option_symbol=candidate.option_symbol,
+                raw_value=ep.get("regime_size_multiplier"),
+            )
+            decision.executed_successfully = DecisionStatus.SKIPPED
+            decision.reason = "Invalid regime_size_multiplier"
+            return
         risk_bps = float(ep.get("risk_per_trade_bps", 0))
-        regime_mult = float(ep.get("regime_size_multiplier", 1.0))
         max_premium = self.risk_manager.current_equity * risk_settings.max_option_premium_pct
 
         if risk_settings.fixed_premium_per_trade > 0:
-            risk_dollars = min(risk_settings.fixed_premium_per_trade, max_premium)
+            risk_dollars = risk_settings.fixed_premium_per_trade
         elif risk_bps > 0:
-            risk_dollars = (self.risk_manager.current_equity * risk_bps / 10000.0) * regime_mult
-            risk_dollars = min(risk_dollars, max_premium)
+            risk_dollars = self.risk_manager.current_equity * risk_bps / 10000.0
         else:
             risk_dollars = max_premium
+        risk_dollars = min(risk_dollars, max_premium) * regime_mult
 
         num_contracts = max(0, int(risk_dollars / (option_price * 100)))
         if risk_settings.max_contracts_per_trade > 0:
