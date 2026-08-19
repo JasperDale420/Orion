@@ -242,10 +242,19 @@ async def test_commit_ambiguous_failure_on_final_retry_still_applies_effect(
 
 
 @pytest.mark.asyncio
-async def test_restart_with_processed_marker_present_skips_everything(risk_manager_factory) -> None:
+async def test_restart_with_processed_marker_present_still_cleans_up_pending_order(risk_manager_factory) -> None:
     """A fresh FillProcessor + fresh RiskManager (simulating a restart) must
-    not redrive anything for a fill whose durable processed-marker already
-    exists from a prior process's lifetime.
+    not re-drive risk-state application for a fill whose durable
+    processed-marker already exists from a prior process's lifetime -- but
+    IF that prior attempt crashed after the atomic fill-write committed and
+    before it reached the pending-order cleanup (the steps after
+    _write_fill_atomically in process_single_fill), this early-return path
+    is the ONLY remaining chance to clean up the now-orphaned pending-order
+    tracking row, since every later poll of the same fill short-circuits
+    here. remove_pending_order is itself idempotent (no-ops if the row is
+    already gone) and swallows its own persistence failures rather than
+    raising, so it is always safe to call again on this path once the fill
+    is known to be complete (2026-08-19 RCA, codex review).
     """
     await init_db()
 
@@ -271,6 +280,41 @@ async def test_restart_with_processed_marker_present_skips_everything(risk_manag
 
     await processor.process_single_fill(fill, risk_manager, remove_pending_fn)
 
-    assert "RST" not in risk_manager.positions
-    assert remove_pending_fn.await_count == 0
+    assert "RST" not in risk_manager.positions  # risk state itself is not redriven
+    remove_pending_fn.assert_awaited_once_with("orion_restart")
     assert processor._partial_fill_tracker == {}
+
+
+@pytest.mark.asyncio
+async def test_restart_with_processed_marker_present_for_partial_fill_leaves_pending_order(
+    risk_manager_factory,
+) -> None:
+    """Same restart scenario, but the durably-processed marker is for an
+    INTERMEDIATE (not yet complete) cumulative fill amount -- the order is
+    still open, so its pending-order tracking row must NOT be removed.
+    """
+    await init_db()
+
+    async with async_session_factory() as session:
+        session.add(
+            ProcessedFill(fill_id="broker-restart-2:4.0", client_order_id="orion_restart2", ticker="RST2", qty=4.0)
+        )
+        await session.commit()
+
+    processor = FillProcessor()
+    risk_manager = risk_manager_factory()
+    remove_pending_fn = AsyncMock()
+
+    fill = {
+        "id": "broker-restart-2",
+        "client_order_id": "orion_restart2",
+        "symbol": "RST2",
+        "filled_qty": 4.0,
+        "qty": 10.0,
+        "filled_avg_price": 1.5,
+        "side": "sell",
+    }
+
+    await processor.process_single_fill(fill, risk_manager, remove_pending_fn)
+
+    remove_pending_fn.assert_not_awaited()

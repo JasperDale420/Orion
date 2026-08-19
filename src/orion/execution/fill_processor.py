@@ -152,6 +152,20 @@ class FillProcessor:
             fill_marker = f"{order_id}:{filled_qty}"
 
             if await is_fill_processed(fill_marker):
+                # This exact cumulative fill already landed durably — from a
+                # normal re-poll, or from an earlier attempt in THIS process
+                # that crashed after the atomic fill-write
+                # (_write_fill_atomically) committed but before it reached
+                # the pending-order cleanup below. Every later poll of the
+                # same fill short-circuits here, so if the order is now
+                # fully filled, this is the only remaining chance to clean
+                # up its pending-order tracking row — remove_pending_order
+                # is itself idempotent (no-ops once the row is gone) and
+                # swallows its own persistence failures rather than raising,
+                # so it is always safe to call again here (2026-08-19 RCA,
+                # codex review).
+                if filled_qty >= total_qty:
+                    await remove_pending_fn(client_oid)
                 return
 
             last_filled = self._partial_fill_tracker.get(order_id, 0.0)
