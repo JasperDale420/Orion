@@ -31,7 +31,7 @@ from typing import Any
 from sqlalchemy import select
 
 from orion.core.service_lease import SERVICE_LEASE_STALE_SECONDS, _service_lease_key
-from orion.execution.risk.manager import RISK_ACCOUNTING_VERSION
+from orion.execution.risk.manager import RISK_ACCOUNTING_VERSION, _trading_date
 from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
 from orion.storage.models import SystemStatus
@@ -142,12 +142,16 @@ async def record_risk_baseline(
             "accounting_version": state.accounting_version,
         }
 
+        now = datetime.now(UTC)
         state.starting_equity = starting_equity
         state.current_equity = equity
         state.peak_equity = max(starting_equity, equity)
         state.current_daily_loss = 0.0
+        # The zeroed figure belongs to today's session; without a date it would
+        # read as a legacy row and be discarded again on the next load.
+        state.daily_loss_date = _trading_date(now)
         state.accounting_version = RISK_ACCOUNTING_VERSION
-        state.updated_at_utc = datetime.now(UTC)
+        state.updated_at_utc = now
 
         # The superseded figures are logged rather than discarded silently: this
         # command overwrites the only persisted copy of the kill-switch inputs.

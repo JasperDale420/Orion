@@ -344,7 +344,7 @@ def evaluate_circuit_breaker(row: SystemStatus | None, now_utc: datetime) -> Liv
         message=(
             f"GLOBAL CIRCUIT BREAKER is OPEN — trading is halted and will stay halted "
             f"until an operator closes it (open for {age_text}). Cause: {row.details}. "
-            "Reset with `uv run python scripts/reset_circuit_breaker.py` after confirming "
+            "Reset with `uv run python -m orion.jobs.reset_circuit_breaker` after confirming "
             "the underlying condition has cleared"
         ),
     )

@@ -414,9 +414,14 @@ async def test_real_recovery_applies_close_fill_once(monkeypatch) -> None:
     monkeypatch.setattr(fp_mod, "is_fill_processed", AsyncMock(side_effect=lambda m: m in processed))
     monkeypatch.setattr(fp_mod, "mark_fill_processed", AsyncMock(side_effect=lambda m, **k: processed.add(m)))
     monkeypatch.setattr(fp_mod, "persist_fill_record", AsyncMock())
-    # persist_realized_pnl_to_journal is a local import inside the processor, so
+    # _process_single_fill ALSO verifies via its own is_fill_processed import
+    # (a separate name binding from fp_mod's) after delegating to
+    # FillProcessor — patch both against the SAME shared `processed` set so
+    # this test simulates one coherent idempotency store, not two.
+    monkeypatch.setattr(mod, "is_fill_processed", AsyncMock(side_effect=lambda m: m in processed))
+    # allocate_exit_to_journal is a local import inside the processor, so
     # patch it on its own module. (is_closing close → journal attribution path.)
-    monkeypatch.setattr(persist_mod, "persist_realized_pnl_to_journal", AsyncMock())
+    monkeypatch.setattr(persist_mod, "allocate_exit_to_journal", AsyncMock())
     # The double-count guard reflects the real ProcessedFill state: once the
     # close's marker lands, a later cycle is skipped by the guard, not the
     # processor — exactly the production self-heal.

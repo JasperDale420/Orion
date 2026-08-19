@@ -3,13 +3,26 @@
 ## Overview
 
 The circuit breaker is a global kill switch backed by the `system_status` table,
-under the key `GLOBAL_CIRCUIT_BREAKER`. When OPEN, `ExecutionEngine` blocks every
-order (`EXECUTION BLOCKED: Circuit breaker is OPEN`) and connectors skip polling.
+under the key `GLOBAL_CIRCUIT_BREAKER`.
+
+**It halts new entries. It never blocks an exit.** A halted system still has to
+be able to get flat, so no close/exit path consults it. When OPEN:
+
+- `preflight_live_signal` SKIPs each candidate with `Circuit Breaker Open`;
+- `ExecutionEngine._pre_flight_checks` blocks at the engine
+  (`EXECUTION BLOCKED: Circuit breaker is OPEN`);
+- `close_position`, the position monitor's exit loop, and the execution loop's
+  rule-based exit sweep all keep running.
+
+**There is no disable switch.** `ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED` used to
+make `is_open()` return False on an OPEN row. It disabled nothing — the engine
+read the row directly and blocked entries anyway — while emitting a WARNING per
+call (2,287 on 2026-08-14). It was removed; an OPEN row always halts entries.
 
 **It latches.** Nothing closes it automatically — once open it stays open until an
 operator resets it, across restarts. That is deliberate: the conditions that trip
 it are ones a human should look at. It also means a breaker left open silently
-disables trading for as long as nobody notices.
+disables new entries for as long as nobody notices.
 
 Schema: `key`, `status`, `details`, `last_updated_utc`.
 
@@ -39,28 +52,18 @@ URL from `scripts/run_ingestion_native.sh` (it pins `DB_URL`); a plain
 
 Only after confirming the condition that tripped it has cleared.
 
-### Via Python (preferred — this is the path that works)
+### Via operator command (preferred)
 
 ```bash
-DB_URL="<the DB_URL pinned in scripts/run_ingestion_native.sh>" uv run python -c "
-import asyncio, os
-from orion.storage import db
-async def main():
-    db.configure_db(os.environ['DB_URL'], echo=False)
-    from orion.core.circuit_breaker import CircuitBreaker
-    print(await CircuitBreaker().get_state())
-    await CircuitBreaker().close()
-    print(await CircuitBreaker().get_state())
-asyncio.run(main())"
+DB_URL="<the DB_URL pinned in scripts/run_ingestion_native.sh>" \
+  uv run python -m orion.jobs.reset_circuit_breaker --reason "<why>"
 ```
 
-Drop the `close()` line to read the state without changing it.
-
-### Not `scripts/reset_circuit_breaker.py`
-
-That script imports `psycopg2`, which is not a declared dependency and is not
-installed in the venv, so it fails at import with `ModuleNotFoundError`. Use the
-Python path above until the script is fixed or removed.
+Add `--dry-run` to show the current state without modifying it. This uses the
+project's own async ORM path (`orion.core.circuit_breaker.CircuitBreaker`), so
+it needs no extra dependencies. There used to be a `scripts/reset_circuit_breaker.py`
+that imported `psycopg2` (not a declared dependency) and failed at import with
+`ModuleNotFoundError`; it has been replaced by this module.
 
 ### Via admin API
 

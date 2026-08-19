@@ -4,10 +4,13 @@ Tests for MLScorer.
 Tests the flow event scoring logic including heuristic baseline.
 """
 
+import pickle
+import warnings
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from sklearn.exceptions import InconsistentVersionWarning
 
 from orion.ml.scorer import MLScorer, get_scorer
 
@@ -245,3 +248,240 @@ class TestLegacyModelCategoricalFallback:
         score1 = legacy_model_scorer.score(flow1)
         score2 = legacy_model_scorer.score(flow2)
         assert score1 == score2
+
+
+class _VersionMismatch:
+    """A picklable object whose __setstate__ raises InconsistentVersionWarning
+    on unpickle, simulating a scikit-learn artifact trained under a different
+    sklearn release (same fixture shape as tests/ml/test_model_loading.py)."""
+
+    def __getstate__(self) -> dict[str, bool]:
+        return {"restore": True}
+
+    def __setstate__(self, state: dict[str, bool]) -> None:
+        warnings.warn(
+            InconsistentVersionWarning(
+                estimator_name="test estimator",
+                current_sklearn_version="1.9.0",
+                original_sklearn_version="1.8.0",
+            ),
+            stacklevel=2,
+        )
+        self.__dict__.update(state)
+
+
+class TestModelUnloadableLogging:
+    """PR #187 promoted sklearn's InconsistentVersionWarning to a load
+    failure (orion/ml/model_loading.py), so any stale-format model artifact
+    now fails to load instead of loading with a compatibility warning. When
+    every present model file fails this way, the scorer must say so loudly
+    (ERROR, event=ml_models_unloadable) instead of emitting the same WARNING
+    used for a directory that legitimately has no model files at all — those
+    are operationally very different states."""
+
+    def test_files_present_but_unloadable_logs_error_event(self, tmp_path, monkeypatch):
+        import orion.ml.scorer as scorer_mod
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        (model_dir / "SWING_hit_target_50.pkl").write_bytes(pickle.dumps(_VersionMismatch()))
+
+        monkeypatch.setattr(scorer_mod, "MODEL_DIR", model_dir)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(scorer_mod, "logger", mock_logger)
+
+        scorer = scorer_mod.MLScorer()
+
+        assert scorer.use_heuristic is True
+        mock_logger.error.assert_called_once()
+        _args, kwargs = mock_logger.error.call_args
+        extra = kwargs.get("extra", {})
+        assert extra.get("event") == "ml_models_unloadable"
+        assert extra.get("files_present") == 1
+        assert extra.get("loaded") == 0
+        assert extra.get("reason")
+
+    def test_empty_model_dir_logs_warning_not_error(self, tmp_path, monkeypatch):
+        """No .pkl files present at all is a distinct, benign state — it
+        must stay a WARNING, not escalate to the new ERROR event."""
+        import orion.ml.scorer as scorer_mod
+
+        model_dir = tmp_path / "empty_models"
+        model_dir.mkdir()
+
+        monkeypatch.setattr(scorer_mod, "MODEL_DIR", model_dir)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(scorer_mod, "logger", mock_logger)
+
+        scorer = scorer_mod.MLScorer()
+
+        assert scorer.use_heuristic is True
+        mock_logger.error.assert_not_called()
+        mock_logger.warning.assert_called()
+
+    def test_successfully_loaded_model_logs_no_error(self, tmp_path, monkeypatch):
+        """At least one model loading successfully must not trip the new
+        ERROR event, even though other bucket files are absent."""
+        import orion.ml.scorer as scorer_mod
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        (model_dir / "SWING_hit_target_50.pkl").write_bytes(pickle.dumps({"model": "ok", "feature_names": []}))
+
+        monkeypatch.setattr(scorer_mod, "MODEL_DIR", model_dir)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(scorer_mod, "logger", mock_logger)
+
+        scorer = scorer_mod.MLScorer()
+
+        assert scorer.use_heuristic is False
+        mock_logger.error.assert_not_called()
+
+    def test_persistent_unloadable_file_does_not_reflood_error_on_reload(self, tmp_path, monkeypatch):
+        """An unchanged unloadable file must not re-trigger ml_models_unloadable
+        on every periodic reload check — only a genuine mtime change (a fresh
+        load attempt worth reporting) should. Without recording the failing
+        file's mtime, check_and_reload() sees the bucket stuck at its 0
+        default forever and re-attempts + re-logs every reload interval."""
+        import orion.ml.scorer as scorer_mod
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        (model_dir / "SWING_hit_target_50.pkl").write_bytes(pickle.dumps(_VersionMismatch()))
+
+        monkeypatch.setattr(scorer_mod, "MODEL_DIR", model_dir)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(scorer_mod, "logger", mock_logger)
+
+        scorer = scorer_mod.MLScorer()
+        assert mock_logger.error.call_count == 1
+
+        mock_logger.reset_mock()
+        reloaded = scorer.check_and_reload()
+
+        assert reloaded is False
+        mock_logger.error.assert_not_called()
+
+    def test_stale_skipped_file_does_not_reflood_error_on_reload(self, tmp_path, monkeypatch):
+        """Same reflood risk as an unloadable file, but for a file rejected
+        by stale_model_policy='skip': its mtime must also be recorded so an
+        unchanged stale file isn't treated as newer-than-loaded (and
+        re-attempted + re-logged) on every periodic reload check."""
+        import os
+        import time
+
+        import orion.ml.scorer as scorer_mod
+        from orion.config import system_settings
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_path = model_dir / "SWING_hit_target_50.pkl"
+        model_path.write_bytes(pickle.dumps({"model": "ok", "feature_names": []}))
+        old_time = time.time() - 30 * 86400  # 30 days old > default 14-day max
+        os.utime(model_path, (old_time, old_time))
+
+        monkeypatch.setattr(scorer_mod, "MODEL_DIR", model_dir)
+        monkeypatch.setattr(system_settings, "ml_stale_model_policy", "skip")
+        mock_logger = MagicMock()
+        monkeypatch.setattr(scorer_mod, "logger", mock_logger)
+
+        scorer = scorer_mod.MLScorer()
+        assert scorer.use_heuristic is True  # skipped, nothing loaded
+        assert mock_logger.error.call_count == 1  # file present but 0 loaded -> ml_models_unloadable
+
+        mock_logger.reset_mock()
+        reloaded = scorer.check_and_reload()
+
+        assert reloaded is False
+        mock_logger.error.assert_not_called()
+
+    def test_replacing_a_loaded_model_with_an_unloadable_file_keeps_the_old_model(self, tmp_path, monkeypatch):
+        """A model already loaded must not be silently dropped just because
+        its refreshed file on disk fails to load — the scorer keeps scoring
+        with the old (still valid) model, so ml_models_unloadable (which
+        means "nothing loaded, heuristic for everyone") must not fire."""
+        import os
+
+        import orion.ml.scorer as scorer_mod
+
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        model_path = model_dir / "SWING_hit_target_50.pkl"
+        model_path.write_bytes(pickle.dumps({"model": "ok", "feature_names": []}))
+
+        monkeypatch.setattr(scorer_mod, "MODEL_DIR", model_dir)
+        scorer = scorer_mod.MLScorer()
+        assert scorer.use_heuristic is False
+        assert "SWING" in scorer.models
+
+        # Replace the file with a broken one, with a deliberately later mtime
+        # (no sleeping — set it explicitly) so check_and_reload() sees it.
+        original_mtime = model_path.stat().st_mtime
+        model_path.write_bytes(pickle.dumps(_VersionMismatch()))
+        os.utime(model_path, (original_mtime + 10, original_mtime + 10))
+
+        mock_logger = MagicMock()
+        monkeypatch.setattr(scorer_mod, "logger", mock_logger)
+
+        reloaded = scorer.check_and_reload()
+
+        assert reloaded is True
+        assert "SWING" in scorer.models  # old model retained, not dropped
+        assert scorer.use_heuristic is False
+        mock_logger.error.assert_not_called()
+
+
+class TestLastScoringMode:
+    """`last_scoring_mode` must reflect the ACTUAL path the most recent
+    score()/score_enriched() call took — not the scorer's global
+    `use_heuristic` flag. Models are bucket-specific, so a candidate can be
+    heuristically scored even while other buckets have a trained model
+    loaded, and a loaded model's inference can itself raise and fall back
+    to the heuristic scorer for that one call. use_heuristic only reflects
+    whether ANY bucket has a model loaded at all, so it captures neither
+    case correctly."""
+
+    @pytest.fixture
+    def partial_model_scorer(self, tmp_path):
+        """A scorer with ONLY a SWING model loaded — SHORT_SWING and other
+        buckets have no model despite `use_heuristic` reading False overall."""
+        import orion.ml.scorer as scorer_mod
+
+        orig = scorer_mod.MODEL_DIR
+        scorer_mod.MODEL_DIR = tmp_path / "empty_models"
+        scorer_mod._scorer = None
+        scorer = MLScorer()
+        mock_model = MagicMock()
+        mock_model.predict_proba.return_value = np.array([[0.3, 0.7]])
+        feature_names: list[str] = []
+        scorer.models["SWING"] = {"model": mock_model, "feature_names": feature_names}
+        scorer.feature_names["SWING"] = feature_names
+        scorer.use_heuristic = False
+        yield scorer
+
+        scorer_mod.MODEL_DIR = orig
+        scorer_mod._scorer = None
+
+    def test_bucket_with_loaded_model_reports_model(self, partial_model_scorer):
+        flow = {"dte": 10}  # SWING bucket (4-14 dte) — has a model
+        partial_model_scorer.score(flow)
+        assert partial_model_scorer.last_scoring_mode == "model"
+
+    def test_bucket_without_a_loaded_model_reports_heuristic(self, partial_model_scorer):
+        flow = {"dte": 1}  # SHORT_SWING bucket (1-3 dte) — no model loaded
+        partial_model_scorer.score(flow)
+        assert partial_model_scorer.last_scoring_mode == "heuristic"
+
+    def test_inference_exception_reports_heuristic_even_though_bucket_has_a_model(self, partial_model_scorer):
+        """A loaded model whose predict_proba raises mid-call must record
+        `last_scoring_mode == "heuristic"` for THAT call — the model entry
+        stays in self.models (untouched), so a bucket-presence check alone
+        would wrongly say "model"."""
+        partial_model_scorer.models["SWING"]["model"].predict_proba.side_effect = RuntimeError("boom")
+        flow = {"dte": 10, "premium_usd": 50000, "put_call": "C"}
+
+        score = partial_model_scorer.score(flow)
+
+        assert partial_model_scorer.last_scoring_mode == "heuristic"
+        assert isinstance(score, float)  # heuristic fallback still returns a usable score
+        assert "SWING" in partial_model_scorer.models  # model entry itself is untouched

@@ -1,7 +1,7 @@
 """Expiry-worthless realization sweep.
 
 An expired option produces no closing fill, so the fill-driven P&L path
-(`persist_realized_pnl_to_journal`) never runs and the journal row stays
+(`allocate_exit_to_journal`) never runs and the journal row stays
 open forever. `realize_expired_journal_rows` closes that gap: entries whose
 candidate's expiration passed more than a day ago are realized at a total
 loss of the entry premium and tagged `expired_worthless`.

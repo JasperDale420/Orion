@@ -55,6 +55,21 @@ SERVICE_LEASE_KEY_PREFIX = "service_lease_"
 SERVICE_LEASE_STALE_SECONDS = 120
 
 
+class ServiceLeaseLostError(RuntimeError):
+    """The lease is confirmably held by another live instance.
+
+    Raised by ``renew_service_lease`` only for callers that opt in with
+    ``fence_on_confirmed_loss=True``, and only on CONFIRMED loss: the row
+    exists, carries a different run_id, and is fresh. A DB error, a missing
+    row, a foreign row that has itself gone stale, and our own stale row are
+    all doubt, not proof, and stay non-fatal.
+
+    Fatal means the process must exit non-zero so its supervisor relaunches
+    it — the relaunched instance re-acquires only if the lease is genuinely
+    free or stale.
+    """
+
+
 def _service_lease_key(service_id: str) -> str:
     return f"{SERVICE_LEASE_KEY_PREFIX}{service_id}"
 
@@ -67,6 +82,26 @@ def _resolve_run_id() -> str:
 
 def _format_details(run_id: str) -> str:
     return f"run_id={run_id} host={socket.gethostname()} pid={os.getpid()}"
+
+
+def _is_fresh(last_updated_utc: datetime | None) -> bool:
+    """True when the row was heartbeated within the stale window.
+
+    An absent timestamp reads as NOT fresh: it is not evidence of a live
+    holder, and fencing is only ever justified by evidence.
+
+    A FUTURE timestamp reads as not fresh either. A negative age is clock
+    skew or a stray fixture, not a heartbeat — and accepting it would fence a
+    healthy process whose relaunch is then refused the lease on the same
+    reading, a crash loop lasting until the timestamp ages out.
+    """
+    if last_updated_utc is None:
+        return False
+    last_utc = ensure_utc(last_updated_utc)
+    if last_utc is None:
+        return False
+    age = (datetime.now(UTC) - last_utc).total_seconds()
+    return 0.0 <= age < SERVICE_LEASE_STALE_SECONDS
 
 
 async def acquire_service_lease(service_id: str) -> str:
@@ -139,13 +174,24 @@ async def acquire_service_lease(service_id: str) -> str:
     return run_id
 
 
-async def renew_service_lease(service_id: str, run_id: str) -> None:
+async def renew_service_lease(service_id: str, run_id: str, *, fence_on_confirmed_loss: bool = False) -> None:
     """Refresh the lease's ``last_updated_utc`` so other processes see it live.
 
     Defensive: only renews if the row still belongs to ``run_id``. If
     another process has taken over (we hung past the stale threshold
     and they legitimately claimed it), logs ``service_lease_lost`` and
     returns without overwriting their row.
+
+    With ``fence_on_confirmed_loss=True``, a CONFIRMED takeover — the row
+    exists, carries a different run_id, and is fresh — instead logs CRITICAL
+    ``SERVICE_LEASE_LOST_FENCING`` and raises ``ServiceLeaseLostError`` so the
+    caller can exit rather than carry on as a second writer. Callers that do
+    their own confirmation (``position_monitor``, ``data_quality`` re-read the
+    row themselves) leave it off and keep the log-and-return contract.
+
+    A foreign row that has itself gone stale is NOT confirmed loss: whoever
+    took it is no longer heartbeating, so there is nobody live to yield to.
+    Neither is our own stale row — being slow to renew is not losing it.
 
     DB errors are logged but do not propagate — a transient DB blip
     must not abort the caller's main loop. The next heartbeat retries.
@@ -164,12 +210,30 @@ async def renew_service_lease(service_id: str, run_id: str) -> None:
             existing = (await session.execute(stmt)).scalars().first()
             if existing is not None:
                 if f"run_id={run_id}" not in (existing.details or ""):
+                    if fence_on_confirmed_loss and _is_fresh(existing.last_updated_utc):
+                        logger.critical(
+                            "service_lease_lost_fencing",
+                            extra={
+                                "event_type": "SERVICE_LEASE_LOST_FENCING",
+                                "service_id": service_id,
+                                "run_id": run_id,
+                                "current_details": existing.details,
+                            },
+                        )
+                        raise ServiceLeaseLostError(
+                            f"'{service_id}' lease (run_id={run_id}) is held by another live instance "
+                            f"({existing.details!r}). Exiting to preserve the single-process invariant."
+                        )
                     logger.warning(
                         "service_lease_lost",
                         extra={
                             "event_type": "SERVICE_LEASE_LOST",
                             "service_id": service_id,
                             "current_details": existing.details,
+                            # Surfaced so a foreign row that is stale — or
+                            # future-dated by clock skew — is diagnosable
+                            # rather than an unexplained absence of fencing.
+                            "current_last_updated_utc": str(existing.last_updated_utc),
                         },
                     )
                     return
@@ -185,6 +249,9 @@ async def renew_service_lease(service_id: str, run_id: str) -> None:
                     )
                 )
             await session.commit()
+    except ServiceLeaseLostError:
+        # Proof of a live competitor, not a transient failure — never swallowed.
+        raise
     except Exception as exc:
         logger.warning(
             "service_lease_renew_failed",

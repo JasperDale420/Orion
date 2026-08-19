@@ -61,15 +61,20 @@ async def preflight_live_signal(
     cand_ts = _ensure_utc(candidate.timestamp_utc)
     assert now is not None and cand_ts is not None  # both inputs are non-None here
 
+    from orion.execution.exit_fallback_rules import bucket_for_dte
+
+    # Calendar-day DTE, the same convention as count_open_journal_positions and
+    # the engine's entry caps — including classifying an unknown expiry as
+    # SWING, so one candidate never lands in two different buckets.
+    dte = (candidate.expiration_date.date() - now.date()).days if candidate.expiration_date is not None else None
+    bucket = bucket_for_dte(dte)
+
     # Per-bucket age budget: a 2-minute-old 0DTE momentum signal is dead,
     # while a multi-day swing thesis survives a 15-minute-old print. Falls
     # back to the flat max_data_lag_seconds when the bucket is unknown.
     lag_budget = float(system_settings.max_data_lag_seconds)
     if candidate.expiration_date is not None:
-        from orion.execution.exit_fallback_rules import bucket_for_dte
-
-        dte = (candidate.expiration_date.date() - now.date()).days
-        lag_budget = float(system_settings.bucket_signal_age_budgets.get(bucket_for_dte(dte), lag_budget))
+        lag_budget = float(system_settings.bucket_signal_age_budgets.get(bucket, lag_budget))
 
     lag_seconds = (now - cand_ts).total_seconds()
     if lag_seconds > lag_budget:
@@ -92,6 +97,32 @@ async def preflight_live_signal(
     if await cb.is_open():
         state = await cb.get_state()
         return PreflightResult(ok=False, reason="Circuit Breaker Open", extra={"circuit_breaker": state})
+
+    # Per-bucket entry halt opened by the nightly measurement loop when a
+    # bucket's trailing-50 profit factor collapses. Entry-side only: exits do
+    # not run through preflight, so a halted bucket still closes what it holds.
+    #
+    # `get_active_halt` returns None on a DB error rather than raising, and
+    # this gate deliberately does NOT fail closed on that. A halt is a measured
+    # verdict promoted to an action, not a kill switch — a database blip must
+    # not silently stop trading. The circuit breaker, daily-loss limit and
+    # drawdown kill switch are the gates that fail closed; this one composes
+    # with them additively and only ever removes one bucket from the menu.
+    from orion.jobs.bucket_halt import get_active_halt
+
+    halt = await get_active_halt(bucket, now=now)
+    if halt is not None:
+        return PreflightResult(
+            ok=False,
+            reason=f"Bucket halted by measurement loop: {halt.describe()}",
+            extra={
+                "bucket": halt.bucket,
+                "profit_factor": halt.profit_factor,
+                "n_closed": halt.n_closed,
+                "expires_after_session": halt.expires_after_session.isoformat(),
+                "set_by": halt.set_by,
+            },
+        )
 
     exec_params = decision.execution_params or {}
     candidate_params = candidate.execution_params or {}

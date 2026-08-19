@@ -15,7 +15,12 @@ from orion.config import system_settings
 from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.gateway_stream_client import create_gateway_stream_client
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
-from orion.core.service_lease import SERVICE_LEASE_STALE_SECONDS, acquire_service_lease, renew_service_lease
+from orion.core.service_lease import (
+    SERVICE_LEASE_STALE_SECONDS,
+    ServiceLeaseLostError,
+    acquire_service_lease,
+    renew_service_lease,
+)
 from orion.core.timekeeping import (
     closed_sessions_between,
     derive_trading_date_and_session,
@@ -275,6 +280,13 @@ class IngestionService:
             try:
                 await self._run_cycle()
                 self._log_cycle_latency(asyncio.get_running_loop().time() - start_time)
+            except ServiceLeaseLostError:
+                # Another live instance owns our lease (the sleep loop renews
+                # from inside _run_cycle). Stop being a second writer: exit
+                # non-zero so launchd relaunches, and the relaunch re-acquires
+                # only if the lease is genuinely free.
+                self.shutdown_event.set()
+                raise
             except BaseException as e:
                 # Catch BaseException (not just Exception) so SystemExit /
                 # CancelledError from a misbehaving background task can't
@@ -302,6 +314,9 @@ class IngestionService:
 
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
+            except ServiceLeaseLostError:
+                self.shutdown_event.set()
+                raise
             except Exception as e:
                 logger.error(f"Heartbeat/sleep tail error: {type(e).__name__}: {e}", exc_info=True)
                 await asyncio.sleep(5.0)
@@ -337,10 +352,17 @@ class IngestionService:
         which swallows transient DB errors so a blip here can't crash
         the ingestion loop. Repeated failures naturally let the lease
         go stale so another process can legitimately take over.
+
+        Fences on confirmed loss: if the row is held by another live
+        instance, this raises `ServiceLeaseLostError` rather than logging
+        and carrying on. Ingestion is a writer — bronze/silver, EOD
+        reconcile and sweep — so a displaced instance that keeps running
+        races the winner on the same tables (2026-06-08: a leftover docker
+        container thrashed the lease across 345 restarts).
         """
         if self._lease_run_id is None:
             return
-        await renew_service_lease("ingestion", self._lease_run_id)
+        await renew_service_lease("ingestion", self._lease_run_id, fence_on_confirmed_loss=True)
 
     async def _run_cycle(self) -> None:
         await self._check_overnight_sleep()
@@ -564,6 +586,11 @@ class IngestionService:
                 # 60s sleep chunk keeps the DB row well within
                 # ingestion_heartbeat_max_age.
                 await self._update_health_status()
+                # The single-instance lease has the same problem: `run()` only
+                # renews it after `_run_cycle` returns, which never happens
+                # while this loop is parked over a weekend. A lease older than
+                # SERVICE_LEASE_STALE_SECONDS lets a second instance take over.
+                await self._maybe_renew_lease()
                 # Re-checked each chunk so the settlement grace period elapsing
                 # mid-sleep still triggers, and so a failed run retries within
                 # the same night (bounded by EOD_RETRY_INTERVAL_SECONDS).
@@ -1179,9 +1206,16 @@ class IngestionService:
         session as complete on True, so a failure is retried rather than lost.
         """
         try:
-            from orion.execution.persistence import realize_expired_journal_rows
+            from orion.execution.persistence import (
+                realize_expired_journal_rows,
+                reconcile_journal_exits_from_fills,
+            )
             from orion.jobs.reconcile_pnl import STATUS_BROKER_UNAVAILABLE, run_reconciliation
 
+            # Attribute any recorded sell fill the live path missed BEFORE the
+            # expiry sweep, so a lot that was actually sold is never booked as
+            # expired-worthless (2026-08-13: 25 sold July lots swept at -100%).
+            await reconcile_journal_exits_from_fills()
             await realize_expired_journal_rows()
             result = await run_reconciliation(trading_date)
         except Exception as e:

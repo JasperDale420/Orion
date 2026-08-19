@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
@@ -50,6 +50,28 @@ def closed_sessions_between(after: date, through: date, *, calendar_name: str = 
     cal = xcals.get_calendar(calendar_name)
     sessions = cal.sessions_in_range(pd.Timestamp(after), pd.Timestamp(through))
     return [s.date() for s in sessions if s.date() > after]
+
+
+def sessions_forward(start: date, sessions: int, *, calendar_name: str = "XNYS") -> date:
+    """Date of the ``sessions``-th XNYS session strictly after ``start``.
+
+    Counts trading sessions, not calendar days: weekends and exchange holidays
+    are skipped, and a ``start`` that is itself a weekend or holiday simply has
+    no session to exclude. Used to time-box windows expressed in sessions — a
+    ten-session window opened on a Friday ends two trading weeks later, not on
+    the tenth calendar day.
+    """
+    if sessions < 1:
+        raise ValueError("sessions must be >= 1")
+
+    cal = xcals.get_calendar(calendar_name)
+    # Generous calendar horizon: even the most holiday-dense stretch of XNYS
+    # fits n sessions inside 2n+21 calendar days, and only the nth is read.
+    horizon = start + timedelta(days=sessions * 2 + 21)
+    forward = [s.date() for s in cal.sessions_in_range(pd.Timestamp(start), pd.Timestamp(horizon)) if s.date() > start]
+    if len(forward) < sessions:
+        raise ValueError(f"calendar {calendar_name} has fewer than {sessions} sessions after {start}")
+    return forward[sessions - 1]
 
 
 @dataclass(frozen=True)

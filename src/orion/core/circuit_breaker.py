@@ -1,7 +1,8 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 
 from orion.shared.db_utils import db_query, db_write
 from orion.shared.logger import setup_struct_logger
@@ -24,30 +25,48 @@ class CircuitBreaker:
 
     async def open(self, reason: str) -> None:
         """
-        Trips the circuit breaker (Stops Trading).
+        Trips the circuit breaker (Stops New Entries).
+
+        Re-opening an already-open breaker keeps the FIRST reason and is a
+        no-op. Callers on a hot path (the drawdown kill switch runs on every
+        fill) may therefore call this repeatedly; only the transition logs.
+
+        The transition is a single conditional UPDATE so two processes racing
+        to trip the breaker can't both claim it: the loser's statement matches
+        no row, so it neither overwrites the first reason nor re-logs. When
+        there is no row at all yet, both can reach the insert and one loses on
+        the primary key — that loser retries against the row the winner just
+        committed rather than raising into the drawdown kill switch.
         """
 
-        async def set_breaker(session: Any) -> None:
+        async def set_breaker(session: Any) -> bool:
+            result = await session.execute(
+                update(SystemStatus)
+                .where(SystemStatus.key == self.KEY, SystemStatus.status != "OPEN")
+                .values(status="OPEN", details=reason, last_updated_utc=datetime.now(UTC))
+            )
+            if result.rowcount:
+                return True
+
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
-            result = await session.execute(stmt)
-            status_record = result.scalars().first()
+            if (await session.execute(stmt)).scalars().first() is not None:
+                return False  # Already open
 
-            if status_record:
-                if status_record.status == "OPEN":
-                    return  # Already open
-                status_record.status = "OPEN"
-                status_record.details = reason
-                status_record.last_updated_utc = datetime.now(UTC)
-            else:
-                status_record = SystemStatus(
-                    key=self.KEY, status="OPEN", details=reason, last_updated_utc=datetime.now(UTC)
-                )
-                session.add(status_record)
+            session.add(SystemStatus(key=self.KEY, status="OPEN", details=reason, last_updated_utc=datetime.now(UTC)))
+            return True
 
-        await db_write(set_breaker)
-        logger.critical(f"CIRCUIT BREAKER OPENED: {reason}")
+        try:
+            changed = await db_write(set_breaker)
+        except IntegrityError:
+            # Another process inserted the row between our UPDATE and our
+            # INSERT. Re-run against it: the retry now finds a row, and an
+            # already-OPEN one resolves to "no transition".
+            changed = await db_write(set_breaker)
 
-    async def close(self) -> None:
+        if changed:
+            logger.critical(f"CIRCUIT BREAKER OPENED: {reason}")
+
+    async def close(self, reason: str | None = None) -> None:
         """
         Resets the circuit breaker (Resumes Trading).
         """
@@ -59,7 +78,7 @@ class CircuitBreaker:
 
             if status_record:
                 status_record.status = "CLOSED"
-                status_record.details = "Reset by system/operator"
+                status_record.details = reason or "Reset by system/operator"
                 status_record.last_updated_utc = datetime.now(UTC)
 
         await db_write(reset_breaker)
@@ -67,29 +86,17 @@ class CircuitBreaker:
 
     async def is_open(self) -> bool:
         """
-        Checks if trading should be halted.
-        Returns True if OPEN (Halted).
+        Reports whether NEW ENTRIES are halted. Returns True if OPEN.
 
-        When ``global_circuit_breaker_enabled`` is False the breaker still
-        records OPEN events in the DB (so the operator can see what would
-        have tripped) but `is_open()` always returns False, so callers
-        treat trading as nominal. Intended for forward-testing windows.
+        This is an entry gate only. Risk-reducing exits and closes must never
+        consult it — a halted system still has to be able to get flat — so no
+        exit path calls this method.
+
+        The read is silent by design: it runs once per candidate and once per
+        execution cycle, so anything logged here is logged thousands of times
+        a day. State changes are logged by ``open()`` / ``close()``, and the
+        dead-man watchdog alerts on a breaker left open.
         """
-
-        from orion.config import SystemSettings
-
-        if not SystemSettings().global_circuit_breaker_enabled:
-
-            async def fetch_state_for_log(session: Any) -> bool:
-                stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)
-                result = await session.execute(stmt)
-                status_record = result.scalars().first()
-                return status_record is not None and status_record.status == "OPEN"
-
-            would_open = await db_query(fetch_state_for_log)
-            if would_open:
-                logger.warning("global_circuit_breaker_would_open_but_disabled")
-            return False
 
         async def check_status(session: Any) -> bool:
             stmt = select(SystemStatus).where(SystemStatus.key == self.KEY)

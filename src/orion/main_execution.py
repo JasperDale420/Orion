@@ -8,6 +8,7 @@ load_dotenv()
 
 from orion.config import system_settings
 from orion.core.enums import DecisionAction, DecisionStatus
+from orion.core.service_lease import ServiceLeaseLostError
 from orion.execution.execution_engine import ExecutionEngine
 from orion.execution.flow_helpers import (
     _scope_recent_flow_for_position,
@@ -35,6 +36,8 @@ logger = setup_struct_logger("orion.execution")
 # Liveness cadence budget: the ~1s execution loop publishes every iteration; the
 # dead-man watchdog alerts if no successful iteration lands within 300s.
 EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS = 300
+# Statuses the execution engine sets to mean "this attempt is resolved".
+_TERMINAL_EXEC_STATUSES = frozenset({DecisionStatus.TRUE, DecisionStatus.FALSE, DecisionStatus.SKIPPED})
 _EXECUTION_STARTUP_LIVENESS_INTERVAL_SECONDS = 60.0
 
 # Re-export for backward compatibility (tests import from here)
@@ -143,19 +146,13 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
             # 1.5 Poll Fills (Real-time Risk Updates)
             await execution_engine.poll_fills()
 
-            # 1.6 Check Circuit Breaker
-            from orion.core.circuit_breaker import CircuitBreaker
-
-            cb = CircuitBreaker()
-            if await cb.is_open():
-                state = await cb.get_state()
-                logger.warning(f"CIRCUIT BREAKER OPEN: {state.get('reason')}. Pausing execution.")
-                # Liveness: a deliberate breaker pause is a healthy, functioning
-                # loop — publish success so the dead-man doesn't double-alarm on
-                # top of the breaker's own alerting.
-                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
-                await asyncio.sleep(5.0)
-                continue
+            # No circuit-breaker gate here on purpose. An open breaker halts
+            # ENTRIES, and both entry gates below are inside the per-candidate
+            # path: `preflight_live_signal` SKIPs with "Circuit Breaker Open"
+            # and `ExecutionEngine._pre_flight_checks` blocks at the engine.
+            # A gate here had to `continue`, which skipped the rule-based exit
+            # sweep at the bottom of this same iteration — a latched breaker
+            # would have stopped the halted system from getting flat.
 
             # 2. Poll Pending Candidates
             #    Sweep stale candidates first so the pending pool doesn't
@@ -172,15 +169,13 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
 
             candidates = await fetch_pending_candidates()
 
-            if not candidates:
-                # Liveness: an empty candidate pool is the normal quiet state —
-                # the full poll+sweep+fetch cycle succeeded.
-                await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
-                # Sleep and continue
-                await asyncio.sleep(1.0)
-                continue
-
-            logger.info(f"Processing {len(candidates)} new candidates...")
+            # An empty candidate pool never short-circuits the cycle. It is the
+            # normal quiet state — and the steady state after a halt, once the
+            # breaker has SKIPped the pool dry — so `continue`ing here skipped
+            # the rule-based exit sweep below on exactly the cycles where
+            # getting flat matters most. The tail's smart sleep paces the loop.
+            if candidates:
+                logger.info(f"Processing {len(candidates)} new candidates...")
 
             for candidate in candidates:
                 # 3. Policy Execution
@@ -216,15 +211,26 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
                 await save_decision(decision, candidate)
 
                 # 5. Execute (if EXECUTE)
-                exec_status = DecisionStatus.SKIPPED
+                exec_status: str = DecisionStatus.SKIPPED
                 if decision.decision == DecisionAction.EXECUTE:
                     try:
                         await execution_engine.execute_order(decision, candidate)
 
-                        if decision.executed_successfully == DecisionStatus.TRUE:
-                            exec_status = DecisionStatus.TRUE
-                        else:
-                            exec_status = DecisionStatus.FALSE
+                        # The engine distinguishes a business-reason skip
+                        # (illiquid, earnings window, position cap, factor
+                        # gate) from a genuine failure (risk rejection, price
+                        # fetch failure, missing expiry) — persist that
+                        # distinction instead of collapsing both to FALSE.
+                        # Anything else (still PENDING, or unset) means the
+                        # engine returned without resolving the attempt:
+                        # record FALSE rather than leave a PENDING row that
+                        # reconcile_orphaned_decisions can never repair,
+                        # since it repairs from a linked order record and
+                        # an unresolved attempt has none.
+                        engine_status = decision.executed_successfully or ""
+                        exec_status = (
+                            engine_status if engine_status in _TERMINAL_EXEC_STATUSES else DecisionStatus.FALSE
+                        )
 
                     except Exception as exe:
                         logger.error(f"Execution Exception: {exe}")
@@ -247,6 +253,14 @@ async def run_execution_service(shutdown_event: asyncio.Event) -> None:
             # heartbeat even when decisioning/preflight/persistence then failed).
             await publish_liveness("execution", cadence_budget_seconds=EXECUTION_LIVENESS_CADENCE_BUDGET_SECONDS)
 
+        except ServiceLeaseLostError:
+            # Another live instance owns the `execution` lease (poll_fills
+            # renews it every iteration). The engine's in-memory order and
+            # fill state assumes one process, so stop rather than log and
+            # continue: exit non-zero and let launchd relaunch, which
+            # re-acquires only if the lease is genuinely free.
+            shutdown_event.set()
+            raise
         except Exception as e:
             logger.error(f"Main Loop Error: {e}")
             # Error-only liveness: records last_error but does NOT advance

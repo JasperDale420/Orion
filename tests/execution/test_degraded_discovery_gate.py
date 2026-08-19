@@ -64,6 +64,12 @@ class TestDiscoveryDegradationLogic:
         # Defensive — anything that's not bronze/heber is suspect.
         assert _is_discovery_degraded("???", streak=3, warn_streak=3) is True
 
+    def test_market_closed_idle_is_never_degraded(self) -> None:
+        """Empty bronze outside market hours is expected quiet, not an outage —
+        no streak length may turn it into a Monday-open trade block."""
+        assert _is_discovery_degraded("market_closed_idle", streak=3, warn_streak=3) is False
+        assert _is_discovery_degraded("market_closed_idle", streak=300, warn_streak=3) is False
+
 
 @pytest.mark.integration
 @pytest.mark.asyncio
@@ -101,6 +107,20 @@ class TestPersistDiscoveryStatus:
 
         assert row is not None
         assert row.status == DISCOVERY_STATUS_OK
+
+    async def test_persist_discovery_status_ok_for_market_closed_idle(self) -> None:
+        """A weekend-long market_closed_idle streak must persist OK, so the
+        ExecutionEngine health gate never sees DEGRADED at Monday's open."""
+        await init_db()
+        await persist_discovery_status(source="market_closed_idle", streak=300, warn_streak=3)
+
+        async with async_session_factory() as session:
+            stmt = select(SystemStatus).where(SystemStatus.key == DEGRADED_DISCOVERY_KEY)
+            row = (await session.execute(stmt)).scalars().first()
+
+        assert row is not None
+        assert row.status == DISCOVERY_STATUS_OK
+        assert "source=market_closed_idle" in row.details
 
     async def test_round_trip_through_recovery(self) -> None:
         """Flag flips DEGRADED → OK when source recovers."""

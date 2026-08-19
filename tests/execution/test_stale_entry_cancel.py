@@ -31,11 +31,34 @@ from orion.storage.models_execution import OrderRecord
 
 
 def _engine() -> ExecutionEngine:
-    """Bare engine; the DB query is stubbed so these target cancel logic only."""
+    """Bare engine; the DB query is stubbed so these target cancel logic only.
+
+    The pre-cancel broker-state refresh (2026-08-17 fix) is stubbed to report
+    every stale order as confirmed OPEN at the broker, so tests that only care
+    about `cancel_order`'s response (rejection, success, backoff, ...) don't
+    also need to wire up `get_orders`/`get_order`. Tests that exercise the
+    refresh itself use `_engine_real_refresh()` instead.
+    """
     ee = ExecutionEngine.__new__(ExecutionEngine)
     ee._remove_pending_order_compat = AsyncMock()
     # __new__ bypasses __init__, so the cancel-state dict must be seeded here
     # (the engine lazily seeds it too, but tests assert on it directly).
+    ee._cancel_attempts = {}
+    ee._refresh_open_broker_orders = AsyncMock(
+        side_effect=lambda client, stale: {
+            str(r["broker_order_id"]): {"id": str(r["broker_order_id"]), "status": "new"}
+            for r in stale
+            if r.get("broker_order_id")
+        }
+    )
+    return ee
+
+
+def _engine_real_refresh() -> ExecutionEngine:
+    """Bare engine with the REAL pre-cancel broker-state refresh wired up, for
+    tests that exercise the refresh (`get_orders`/`get_order`) itself."""
+    ee = ExecutionEngine.__new__(ExecutionEngine)
+    ee._remove_pending_order_compat = AsyncMock()
     ee._cancel_attempts = {}
     return ee
 
@@ -753,9 +776,16 @@ async def test_recovery_zero_filled_qty_skips_processing(monkeypatch) -> None:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_non_filled_terminal_reconcile_does_not_fetch_or_recover(monkeypatch) -> None:
-    """Only a 'filled' desync has a fill to recover. A 'canceled'/'expired'/
-    'rejected' reconcile must NOT fetch the order or touch the fill processor."""
+async def test_non_filled_terminal_reconcile_checks_for_a_missed_fill_anyway(monkeypatch) -> None:
+    """A 'canceled'/'expired'/'rejected' reconcile via the post-cancel-rejection
+    path (no order payload in hand — the state came from parsing the rejection
+    text) still checks for a missed fill, because an order can partially fill
+    and THEN be canceled/expired: it reports 'canceled'/'expired' with a
+    nonzero filled_qty, not 'partially_filled' (Alpaca only uses that status
+    while still open). _recover_missed_fill's own zero-qty guard makes this
+    safe to call unconditionally — here the broker snapshot has no usable
+    filled_qty (get_order is unconfigured), so process_single_fill is still
+    never touched, but the fetch itself now happens."""
     _patch_clock(monkeypatch)
     import orion.execution.execution_engine as mod
 
@@ -773,8 +803,8 @@ async def test_non_filled_terminal_reconcile_does_not_fetch_or_recover(monkeypat
 
     await ee._cancel_stale_entry_orders(client)
 
-    client.get_order.assert_not_awaited()  # no fill to recover for a non-filled state
-    ee._process_single_fill.assert_not_awaited()
+    client.get_order.assert_awaited_once_with("b-2")  # now checks for a missed partial fill
+    ee._process_single_fill.assert_not_awaited()  # ...but finds nothing usable to process
     assert ("b-2", "canceled") in status_updates
 
 
@@ -787,6 +817,7 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
     set guarantees zero prior fills) and a second recovery of the same order is
     deduped — proving the double-count safety the storm-fix comment relies on."""
     from orion.execution.fill_processor import FillProcessor
+    import orion.execution.execution_engine as mod
     import orion.execution.fill_processor as fp_mod
 
     processed: set[str] = set()
@@ -803,6 +834,11 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
     monkeypatch.setattr(fp_mod, "is_fill_processed", _is_processed)
     monkeypatch.setattr(fp_mod, "mark_fill_processed", _mark)
     monkeypatch.setattr(fp_mod, "persist_fill_record", _persist)
+    # _process_single_fill ALSO verifies via its own is_fill_processed import
+    # (a separate name binding from fp_mod's) after delegating to
+    # FillProcessor — patch both against the SAME shared `processed` set so
+    # this test simulates one coherent idempotency store, not two.
+    monkeypatch.setattr(mod, "is_fill_processed", _is_processed)
 
     outcome = MagicMock()
     outcome.is_closing = False
@@ -883,6 +919,644 @@ async def test_get_order_recovery_is_capped_per_sweep(monkeypatch) -> None:
     await ee._cancel_stale_entry_orders(client)
 
     assert client.get_order.await_count <= cap
+
+
+# ── pre-cancel broker-state refresh (2026-08-17 GW-E4301 freeze fix) ──────────
+#
+# Incident: entry order d67ea8ac (PLTR260821C00182500) FILLED at 14:27:35Z, but
+# the stale-entry sweep's cancel went out at 14:29:11Z — one second before
+# poll_fills recovered the fill (MISSED_FILL_RECOVERED / STALE_ENTRY_RECONCILED
+# broker_state=filled). Alpaca replied 422 "order is already in filled state",
+# and the Gateway's ownership guard treated that as an ambiguous broker
+# mutation and froze the symbol (GW-E4301) — refusing every subsequent order
+# on it, including Orion's closes. Seven symbols froze that day. The sweep must
+# refresh the order's real broker state BEFORE sending the cancel, so it never
+# sends a mutation for an order it hasn't confirmed is still open.
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_open_at_broker_uses_single_batched_call_and_cancels() -> None:
+    """When the batched open-orders snapshot contains the stale order, the
+    sweep confirms it with the ONE call (no per-order fallback) and cancels
+    exactly as before this fix."""
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "EWY"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[{"id": "b-1", "status": "new"}])
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 1
+    client.get_orders.assert_awaited_once_with(status="open", limit=500)
+    client.get_order.assert_not_awaited()  # found in the batch — no fallback needed
+    client.cancel_order.assert_awaited_once_with("b-1")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_all_open_costs_exactly_one_batched_call_regardless_of_stale_count() -> None:
+    """The attack this guards against: N stale orders must not cost N GETs when
+    they're all genuinely open — one batched `get_orders(status=open)` call
+    covers the whole sweep."""
+    ee = _engine_real_refresh()
+    stale = [{"broker_order_id": f"b-{i}", "client_order_id": f"orion_{i}", "ticker": "EWY"} for i in range(8)]
+    ee._fetch_stale_entry_orders = AsyncMock(return_value=stale)
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[{"id": f"b-{i}"} for i in range(8)])
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 8
+    assert client.get_orders.await_count == 1
+    client.get_order.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_filled_at_broker_skips_cancel_and_reconciles(monkeypatch) -> None:
+    """The exact incident shape: the order is no longer in the open-orders
+    snapshot and get_order confirms it FILLED. The sweep must never call
+    cancel_order — that DELETE-on-a-filled-order is what froze the Gateway —
+    and must instead reconcile through the existing terminal-state path."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "d67ea8ac", "client_order_id": "orion_a", "ticker": "PLTR"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])  # no longer open
+    order = _filled_order(broker_id="d67ea8ac", coid="orion_a", symbol="PLTR")
+    client.get_order = AsyncMock(return_value=order)
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()  # the ambiguous mutation is never sent
+    ee._process_single_fill.assert_awaited_once_with(order)
+    assert ("d67ea8ac", "filled") in status_updates
+    ee._remove_pending_order_compat.assert_awaited()
+    assert "d67ea8ac" not in ee._cancel_attempts
+    assert n == 0  # a reconcile is not a cancel
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_canceled_at_broker_skips_cancel_and_reconciles_without_fill_recovery(monkeypatch) -> None:
+    """The reconcile generalises to any terminal broker status found by the
+    refresh: 'canceled' has no fill to recover, so get_order is called exactly
+    once (the state check) and _process_single_fill is never touched."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-2", "client_order_id": "orion_b", "ticker": "EWY"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(return_value={"id": "b-2", "status": "canceled"})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()
+    client.get_order.assert_awaited_once_with("b-2")
+    ee._process_single_fill.assert_not_awaited()
+    assert ("b-2", "canceled") in status_updates
+    assert n == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_done_for_day_at_broker_reconciles(monkeypatch) -> None:
+    """`done_for_day` is one of the terminal states the task explicitly calls
+    out alongside filled/canceled/expired/rejected."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-3", "client_order_id": "orion_c", "ticker": "SPY"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(return_value={"id": "b-3", "status": "done_for_day"})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()
+    assert ("b-3", "done_for_day") in status_updates
+    assert n == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_partially_filled_at_broker_treated_as_open_and_still_cancels() -> None:
+    """A partial fill DB hasn't caught up on yet is still OPEN — Alpaca only
+    reports `partially_filled` while unfilled quantity remains — so the sweep
+    must still cancel it, targeting the remainder, exactly as before this fix.
+    (In practice Alpaca's own `status=open` filter already includes a
+    partially_filled order, so this exercises the classification directly via
+    the bounded per-order fallback.)"""
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "QQQ"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(return_value={"id": "b-1", "status": "partially_filled"})
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 1
+    client.cancel_order.assert_awaited_once_with("b-1")
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fallback_observed_partial_fill_is_recovered_before_cancelling_remainder() -> None:
+    """[high, from adversarial review round 2] A still-OPEN order discovered
+    via the bounded per-order fallback can already carry an executed quantity
+    poll_fills hasn't caught up on. It must be recovered BEFORE the cancel
+    targets the remainder — once cancelled the row leaves the stale set (a
+    fresh status this sweep never re-selects) and that quantity would
+    otherwise be lost forever, never landing in FillRecord/risk/cost basis."""
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "QQQ"}]
+    )
+    order = {"id": "b-1", "status": "partially_filled", "filled_qty": "2", "qty": "5"}
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(return_value=order)
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 1
+    ee._process_single_fill.assert_awaited_once_with(order)  # the executed 2 IS recovered
+    client.cancel_order.assert_awaited_once_with("b-1")  # ...and the remainder is still cancelled
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_batch_observed_partial_fill_is_recovered_before_cancelling_remainder() -> None:
+    """[high, from adversarial review round 2] Same as above but the partial
+    fill is observed via the ONE batched get_orders(status=open) call, not
+    the per-order fallback — Alpaca lists a partially_filled order under
+    status=open with its real filled_qty on the payload. The batch path must
+    retain that payload (not just the order id) so the executed quantity is
+    recovered before the cancel — previously the batch path reduced every
+    open order to bare membership and threw the payload away, silently
+    losing this exact quantity on a successful cancel."""
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "QQQ"}]
+    )
+    order = {"id": "b-1", "status": "partially_filled", "filled_qty": "2", "qty": "5"}
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[order])  # found in the batch itself
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 1
+    client.get_order.assert_not_awaited()  # no fallback needed — found in the batch
+    ee._process_single_fill.assert_awaited_once_with(order)  # the executed 2 IS recovered
+    client.cancel_order.assert_awaited_once_with("b-1")  # ...and the remainder is still cancelled
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_batch_observed_partial_fill_recovery_failure_defers_the_cancel() -> None:
+    """[high, from adversarial review round 3] If recovering the partial fill
+    genuinely fails (not just 'nothing to recover'), the cancel must NOT be
+    sent this cycle — cancelling would drop the row out of the stale set
+    (this sweep never re-selects it again) and permanently lose that
+    quantity. Unlike a terminal reconcile (where the broker has ALREADY
+    finalized the order, so the status flip proceeds regardless — the
+    2026-06-22 storm fix), sending this cancel is a mutation Orion controls
+    and can simply defer to next sweep instead."""
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock(side_effect=RuntimeError("db write failed"))
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "QQQ"}]
+    )
+    order = {"id": "b-1", "status": "partially_filled", "filled_qty": "2", "qty": "5"}
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[order])
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 0
+    client.cancel_order.assert_not_awaited()  # never sent — the quantity would be lost
+    ee._remove_pending_order_compat.assert_not_awaited()  # reservation kept — retry next sweep
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_fallback_observed_partial_fill_recovery_failure_defers_the_cancel() -> None:
+    """[high, from adversarial review round 3] Same as above via the bounded
+    per-order fallback path (order absent from the batch)."""
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock(side_effect=RuntimeError("db write failed"))
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "QQQ"}]
+    )
+    order = {"id": "b-1", "status": "partially_filled", "filled_qty": "2", "qty": "5"}
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(return_value=order)
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 0
+    client.cancel_order.assert_not_awaited()
+    ee._remove_pending_order_compat.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_repeated_partial_fill_recovery_failure_eventually_gives_up_and_alerts(monkeypatch) -> None:
+    """[high, from adversarial review round 4] A recovery that keeps failing
+    (e.g. FillProcessor's in-memory partial-fill tracker already advanced
+    past this quantity on the first failed attempt, so a retry can never
+    re-attempt the write that failed) must not loop silently forever with
+    the day-trading buying power reserved. It is routed through the SAME
+    backoff/give-up/alert state machine a rejected cancel uses, so it ends in
+    a durable operator alert after _CANCEL_MAX_ATTEMPTS."""
+    clock = _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    sent: list[str] = []
+
+    async def _fake_alert(message, *, dedupe_key=None):
+        sent.append(dedupe_key or message)
+        return True
+
+    monkeypatch.setattr(mod, "send_discord_alert", _fake_alert, raising=False)
+
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock(side_effect=RuntimeError("db write failed"))
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "QQQ"}]
+    )
+    order = {"id": "b-1", "status": "partially_filled", "filled_qty": "2", "qty": "5"}
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[order])
+    client.cancel_order = AsyncMock(return_value={})
+
+    max_attempts = mod.ExecutionEngine._CANCEL_MAX_ATTEMPTS
+    for _ in range(max_attempts + 3):
+        clock[0] += 10_000.0
+        await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()  # the ambiguous mutation is never sent, even after giving up
+    assert ee._cancel_attempts["b-1"].gave_up is True
+    assert len(sent) == 1  # one alert, not one per sweep
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_apply_recovered_fill_rejects_nonnumeric_filled_qty_without_raising() -> None:
+    """[medium, from adversarial review round 2] A malformed broker
+    filled_qty must never raise out of the 'NEVER raises' recovery helper —
+    it is untrusted input from the Gateway/broker response."""
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+
+    ok = await ee._apply_recovered_fill({"filled_qty": "not-a-number"}, "b-1", "EWY")
+
+    assert ok is False
+    ee._process_single_fill.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_apply_recovered_fill_rejects_non_finite_filled_qty_without_raising() -> None:
+    """[medium, from adversarial review round 2] NaN passes a naive `<= 0`
+    guard as False (NaN comparisons are always False) and infinity passes it
+    as True — both must be rejected as invalid rather than fed to the fill
+    processor or a risk calculation."""
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+
+    assert await ee._apply_recovered_fill({"filled_qty": "nan"}, "b-1", "EWY") is False
+    assert await ee._apply_recovered_fill({"filled_qty": "inf"}, "b-1", "EWY") is False
+    ee._process_single_fill.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_unrecognized_broker_status_skips_cancel_conservatively() -> None:
+    """A refreshed status that is neither a known-open nor a known-terminal
+    marker must fail toward NOT cancelling rather than guess."""
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "EWY"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(return_value={"id": "b-1", "status": "pending_replace"})
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 0
+    client.cancel_order.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_refresh_sweep_failure_skips_all_cancels_and_retries_next_cycle() -> None:
+    """If the batched refresh itself fails (Gateway error/timeout), fail toward
+    NOT sending any cancel this cycle — never fall back to N individual
+    lookups against a possibly-degraded Gateway. The order stays stale in the
+    DB and is re-evaluated cleanly next sweep once the Gateway recovers."""
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[
+            {"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "EWY"},
+            {"broker_order_id": "b-2", "client_order_id": "orion_b", "ticker": "XHB"},
+        ]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(side_effect=RuntimeError("gateway down"))
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)  # must not raise
+
+    assert n == 0
+    client.cancel_order.assert_not_awaited()
+    client.get_order.assert_not_awaited()
+    ee._remove_pending_order_compat.assert_not_awaited()
+    assert "b-1" not in ee._cancel_attempts  # infra failure, not a broker rejection — no backoff armed
+    assert "b-2" not in ee._cancel_attempts
+
+    # Retried cleanly next cycle once the Gateway recovers.
+    client.get_orders = AsyncMock(return_value=[{"id": "b-1"}, {"id": "b-2"}])
+    n2 = await ee._cancel_stale_entry_orders(client)
+    assert n2 == 2
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_refresh_per_order_failure_skips_only_that_order() -> None:
+    """Only the order NOT found in the batched open snapshot needs a fallback
+    get_order; if THAT lookup fails, only this order's cancel is skipped —
+    a sibling confirmed open in the batch still cancels normally this cycle."""
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[
+            {"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "EWY"},
+            {"broker_order_id": "b-2", "client_order_id": "orion_b", "ticker": "XHB"},
+        ]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[{"id": "b-1"}])  # b-2 missing from the batch
+    client.get_order = AsyncMock(return_value={"error": "500", "detail": "boom", "status_code": 500})
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    assert n == 1
+    client.cancel_order.assert_awaited_once_with("b-1")  # confirmed open — cancelled
+    client.get_order.assert_awaited_once_with("b-2")  # bounded: only the one missing from the batch
+    assert "b-2" not in ee._cancel_attempts  # not penalized — refresh failure, not a rejection
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_refresh_per_order_exception_does_not_break_sweep() -> None:
+    """A raised transport error from the per-order fallback get_order must be
+    swallowed (never crash the sweep) and must skip the cancel for that order."""
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "EWY"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(side_effect=RuntimeError("transport down"))
+    client.cancel_order = AsyncMock(return_value={})
+
+    n = await ee._cancel_stale_entry_orders(client)  # must not raise
+
+    assert n == 0
+    client.cancel_order.assert_not_awaited()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_residual_race_cancel_rejected_terminal_still_reconciles(monkeypatch) -> None:
+    """The refresh confirms 'open', but the broker finalizes the order in the
+    gap before the cancel lands — the residual race the pre-cancel refresh
+    cannot close (the Gateway-side ownership-guard fix, tracked separately,
+    covers this). The cancel is still sent (as the refresh found it open), gets
+    rejected 'already filled', and must still reconcile via the shared path —
+    proving the extraction didn't change this existing, still-necessary
+    behavior."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[{"id": "b-1", "status": "new"}])  # confirmed open at refresh time
+    client.cancel_order = AsyncMock(return_value=_gateway_already_terminal_reject("filled"))
+    client.get_order = AsyncMock(return_value=_filled_order(broker_id="b-1"))
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_awaited_once_with("b-1")  # the refresh said open, so it WAS sent
+    assert ("b-1", "filled") in status_updates
+    assert n == 0
+
+
+# ── adversarial-review follow-ups (Codex, 2026-08-17) ──────────────────────────
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_per_order_fallback_is_bounded_by_the_per_cycle_cap(monkeypatch) -> None:
+    """[high] The per-order fallback (for orders absent from the batched
+    open-orders snapshot) must be bounded by the SAME per-sweep cap as a
+    cancel — otherwise a batch that's missing many orders (e.g. truncated by
+    the Gateway's page limit) turns N stale orders into N individual broker
+    reads in one sweep, exactly the attack-list latency concern this fix
+    exists to prevent."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    cap = mod.ExecutionEngine._CANCEL_MAX_PER_CYCLE
+    ee = _engine_real_refresh()
+    many = [{"broker_order_id": f"b-{i}", "client_order_id": f"orion_{i}", "ticker": "EWY"} for i in range(cap + 10)]
+    ee._fetch_stale_entry_orders = AsyncMock(return_value=many)
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])  # NONE found in the batch — worst case
+    client.get_order = AsyncMock(return_value={"status": "new"})
+    client.cancel_order = AsyncMock(return_value={})
+
+    await ee._cancel_stale_entry_orders(client)
+
+    assert client.get_order.await_count <= cap
+    assert client.cancel_order.await_count <= cap
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_partially_filled_then_canceled_recovers_the_partial_fill(monkeypatch) -> None:
+    """[high] An order that partially filled and was THEN canceled reports
+    'canceled' (not 'partially_filled' — Alpaca only uses that status while
+    still open) with a nonzero filled_qty. This is the 'partially_filled-then-
+    canceled' terminal case the requirement calls out by name; it must still
+    recover the partial fill, not just flip the row to 'canceled' and drop
+    it — otherwise Orion undercounts a real broker position."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}]
+    )
+    order = _filled_order(broker_id="b-1", coid="orion_a", symbol="SPCX", qty=5, price=2.0)
+    order["status"] = "canceled"
+    order["filled_qty"] = "2"  # 2 of 5 filled before the rest was canceled
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])  # not open anymore
+    client.get_order = AsyncMock(return_value=order)
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()
+    client.get_order.assert_awaited_once_with("b-1")  # ONE fetch — reused, not double-fetched
+    ee._process_single_fill.assert_awaited_once_with(order)  # the partial fill IS recovered
+    assert ("b-1", "canceled") in status_updates
+    assert n == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_terminal_reconcile_with_payload_never_double_fetches(monkeypatch) -> None:
+    """[efficiency, from the same review] When the pre-cancel refresh already
+    fetched the order to learn its status, recovering a 'filled' desync must
+    reuse that payload rather than fetching it again inside
+    _recover_missed_fill — exactly one get_order call total."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine_real_refresh()
+    ee._process_single_fill = AsyncMock()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "SPCX"}]
+    )
+    order = _filled_order(broker_id="b-1")
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(return_value=order)
+
+    await ee._cancel_stale_entry_orders(client)
+
+    assert client.get_order.await_count == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_legacy_unowned_via_pre_cancel_refresh_reconciles_without_looping(monkeypatch) -> None:
+    """[high] A legacy pre-2026-05-20 order is absent from the ownership-scoped
+    open-orders batch and 404s GW-E4404 on the individual get_order fallback.
+    Before this fix that surfaced as a generic 'refresh unavailable' warning
+    every sweep forever, bypassing the existing legacy-unowned reconciliation
+    (which the cancel-rejection path already had) and never clearing the row
+    or its pending reservation. It must now reconcile via the same path,
+    without ever sending a cancel."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    sent = _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        side_effect=[
+            [{"broker_order_id": "b-1", "client_order_id": "orion_legacy", "ticker": "MU"}],
+            [],  # sweep 2: the reconcile removed it from the stale set
+        ]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])  # ownership-scoped batch never includes it
+    client.get_order = AsyncMock(return_value=_gateway_legacy_unowned_reject())
+    client.cancel_order = AsyncMock(return_value={})
+
+    n1 = await ee._cancel_stale_entry_orders(client)
+    n2 = await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()  # never attempted — confirmed unreachable up front
+    assert ("b-1", "canceled") in status_updates
+    assert "b-1" not in ee._cancel_attempts
+    assert sent == []
+    assert n1 == 0 and n2 == 0
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_replaced_status_at_broker_reconciles(monkeypatch) -> None:
+    """[medium] `replaced` matches the broker-status vocabulary
+    `decision_persistence._FAILED_BROKER_STATUSES` already treats as dead —
+    it must reconcile like any other terminal state rather than being stuck
+    as 'unrecognized' and retried forever."""
+    _patch_clock(monkeypatch)
+    import orion.execution.execution_engine as mod
+
+    _silence_alerts(monkeypatch, mod)
+    status_updates = _capture_status_updates(monkeypatch, mod)
+
+    ee = _engine_real_refresh()
+    ee._fetch_stale_entry_orders = AsyncMock(
+        return_value=[{"broker_order_id": "b-1", "client_order_id": "orion_a", "ticker": "EWY"}]
+    )
+    client = AsyncMock()
+    client.get_orders = AsyncMock(return_value=[])
+    client.get_order = AsyncMock(return_value={"id": "b-1", "status": "replaced"})
+
+    n = await ee._cancel_stale_entry_orders(client)
+
+    client.cancel_order.assert_not_awaited()
+    assert ("b-1", "replaced") in status_updates
+    assert n == 0
 
 
 # ── query logic (real test DB) ───────────────────────────────────────────────

@@ -312,7 +312,6 @@ For end-to-end pipeline freshness use `tests/e2e/test_live_data_flow.py` (see
 | `run_launchd_health_probe.sh` | Wrapper for the launchd-health probe |
 | `run_market_open_dataflow_check.sh` | Wrapper for the market-open bronze-freshness check |
 | `close_orphaned_positions.py` | Emergency orphan-position closer (one-shot) |
-| `reset_circuit_breaker.py` | Manually close a stuck circuit breaker |
 | `backfill_features.py`, `backfill_fills_from_alpaca.py` | Historical backfills |
 | `backtest_exit_rules.py`, `backtest_param_sweep.py` | Local backtests |
 | `bootstrap_solver.py`, `seed_solvers.py` | Seed the solvers table |
@@ -330,9 +329,9 @@ For end-to-end pipeline freshness use `tests/e2e/test_live_data_flow.py` (see
 | Operation | Command |
 |---|---|
 | Hot-restart execution | `launchctl kickstart -k gui/$(id -u)/com.empire.orion.execution` |
-| See last lease holder | `psql … -c "select * from system_status where component like 'service_lease%';"` |
+| See last lease holder | `psql … -c "select * from system_status where key like 'service_lease%';"` |
 | Stale lease quick clear | Wait 120 s after killing all owners; row goes stale automatically |
-| Close stuck circuit | `uv run python scripts/reset_circuit_breaker.py` |
+| Close stuck circuit | `uv run python -m orion.jobs.reset_circuit_breaker` |
 | Emergency close orphans | `uv run python scripts/close_orphaned_positions.py --min-value 50` |
 | Fresh DB | `docker compose down -v timescaledb && docker compose up timescaledb -d && uv run alembic upgrade head` |
 

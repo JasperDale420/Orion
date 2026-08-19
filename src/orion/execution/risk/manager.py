@@ -9,8 +9,9 @@ Delegates to focused sub-modules:
 
 import math
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from orion.config import RiskSettings, risk_settings
 from orion.core.enums import OrderSide
@@ -41,6 +42,18 @@ _OPTION_CONTRACT_MULTIPLIER = 100.0
 # travels with the data: an external flag could not prove which convention wrote
 # a given row. Bump this whenever the meaning of those columns changes.
 RISK_ACCOUNTING_VERSION = 2
+
+_ET = ZoneInfo("America/New_York")
+
+
+def _trading_date(now_utc: datetime) -> date:
+    """Calendar date in America/New_York that ``now_utc`` falls on.
+
+    The daily-loss limit is a per-session control, so its day boundary is the
+    exchange's midnight rather than UTC's: 2026-08-17T03:30Z is still Sunday
+    23:30 in New York and belongs to 2026-08-16.
+    """
+    return now_utc.astimezone(_ET).date()
 
 
 def _contract_multiplier(symbol: str | None) -> float:
@@ -103,6 +116,12 @@ class RiskManager:
         self.config = config if config is not None else risk_settings
 
         self.current_daily_loss = 0.0
+        # Trading date (America/New_York calendar day) that `current_daily_loss`
+        # belongs to. A freshly-constructed manager owns today's zero figure;
+        # `initialize()` replaces it with the persisted date and discards any
+        # loss carried from an earlier session. Whenever it lags the current
+        # trading date, the next admission check or fill rolls the figure to 0.
+        self._daily_loss_date: date | None = _trading_date(self._now())
         self.open_positions = 0
         self.ticker_exposures: dict[str, float] = {}
         self.pending_orders: dict[str, tuple[str, float]] = {}
@@ -218,6 +237,112 @@ class RiskManager:
         if cfg.max_drawdown_pct <= 0:
             return False
         return self._current_drawdown_pct() >= cfg.max_drawdown_pct
+
+    # ── Daily-loss rollover ──────────────────────────────────────────────
+
+    def _now(self) -> datetime:
+        """Current UTC time. Single seam for everything that derives the trading date."""
+        return datetime.now(UTC)
+
+    def _fill_outside_session_reason(self, filled_at: datetime | None) -> str | None:
+        """Why a broker fill time fails to prove the fill belongs to the current
+        daily-loss session, or None when it does.
+
+        Only a timezone-aware time that is not after the clock and whose
+        America/New_York date equals the session date qualifies. Missing, naive,
+        prior-day and future times (even later on today's date — that is a
+        prediction, not an executed fill) all leave the session unproven; the
+        caller then refuses to let a gain lower today's loss (that would buy
+        headroom on evidence we do not have) while still charging a loss
+        against it.
+        """
+        if filled_at is None:
+            return "no_fill_time"
+        if filled_at.tzinfo is None:
+            return "naive_fill_time"
+        if self._daily_loss_date is None:
+            return "no_session_date"
+        if filled_at > self._now():
+            return "future_fill_time"
+        fill_day = _trading_date(filled_at)
+        if fill_day < self._daily_loss_date:
+            return "prior_session"
+        if fill_day > self._daily_loss_date:
+            return "future_fill_time"
+        return None
+
+    def _roll_daily_loss_if_new_day(self) -> bool:
+        """Zero ``current_daily_loss`` when the trading date has advanced past
+        the day the figure belongs to.
+
+        The in-memory reset is immediate; the new date reaches the ``risk_state``
+        row on the next ``_save_state``. Returns True when a rollover happened.
+        A figure whose date is still None (a pre-column row whose last write was
+        not today, see ``_infer_legacy_daily_loss_date``) has no day identity
+        and rolls the same way — the accounting gate, not this figure, guards
+        the legacy-scale hazard.
+        """
+        today = _trading_date(self._now())
+        if self._daily_loss_date == today:
+            return False
+
+        discarded_loss = self.current_daily_loss
+        discarded_date = self._daily_loss_date
+        if discarded_date is None:
+            message = (
+                f"Daily loss rollover: persisted figure {discarded_loss} carries no trading date (legacy row); "
+                f"starting {today.isoformat()} at 0.0"
+            )
+        else:
+            message = (
+                f"Daily loss rollover: discarding {discarded_loss} from {discarded_date.isoformat()}; "
+                f"starting {today.isoformat()} at 0.0"
+            )
+        logger.info(
+            message,
+            extra={
+                "event_type": "RISK_DAILY_LOSS_ROLLOVER",
+                "discarded_loss": discarded_loss,
+                "discarded_date": None if discarded_date is None else discarded_date.isoformat(),
+                "trading_date": today.isoformat(),
+                "legacy_row": discarded_date is None,
+            },
+        )
+        self.current_daily_loss = 0.0
+        self._daily_loss_date = today
+        return True
+
+    def _infer_legacy_daily_loss_date(self, state: Any) -> date | None:
+        """Day identity for a ``risk_state`` row that predates ``daily_loss_date``.
+
+        The column is added to the live database mid-life, so the row in place
+        at that moment is NULL-dated even though its figure may have been
+        written — and may already sit at the limit — this very session. Its
+        last write time is the only evidence: a row last written today keeps
+        its figure under today's date (the limit stays in force; at worst it
+        also carries earlier sessions' losses until the next rollover, which
+        only blocks more). A row last written on an earlier day, or never
+        stamped, has no claim on today and returns None so the caller rolls it.
+        """
+        last_written = state.updated_at_utc
+        if last_written is None:
+            return None
+        if last_written.tzinfo is None:
+            last_written = last_written.replace(tzinfo=UTC)
+        today = _trading_date(self._now())
+        if _trading_date(last_written) != today:
+            return None
+        logger.info(
+            f"Daily loss {self.current_daily_loss} carries no trading date but was last written today "
+            f"({last_written.isoformat()}); retaining it for {today.isoformat()}",
+            extra={
+                "event_type": "RISK_DAILY_LOSS_DATE_INFERRED",
+                "current_daily_loss": self.current_daily_loss,
+                "updated_at_utc": last_written.isoformat(),
+                "trading_date": today.isoformat(),
+            },
+        )
+        return today
 
     # ── Equity baseline ──────────────────────────────────────────────────
 
@@ -368,6 +493,7 @@ class RiskManager:
         return True
 
     def _check_loss_limits(self, cfg: RiskSettings) -> bool:
+        self._roll_daily_loss_if_new_day()
         if self.current_daily_loss >= cfg.max_daily_loss:
             logger.error(
                 f"RISK REJECT: Daily Loss Limit {cfg.max_daily_loss} Hit (Current Loss: {self.current_daily_loss})"
@@ -613,6 +739,13 @@ class RiskManager:
 
                 if state:
                     self.current_daily_loss = state.current_daily_loss
+                    # The persisted figure belongs to the trading date stamped
+                    # on the row; a row from an earlier session starts today at
+                    # zero, while a mid-day restart keeps the running total.
+                    self._daily_loss_date = state.daily_loss_date
+                    if self._daily_loss_date is None:
+                        self._daily_loss_date = self._infer_legacy_daily_loss_date(state)
+                    self._roll_daily_loss_if_new_day()
                     self.current_equity = state.current_equity
                     self.starting_equity = state.starting_equity
                     self.peak_equity = getattr(state, "peak_equity", 0.0) or max(
@@ -715,8 +848,11 @@ class RiskManager:
             # still carry the legacy 1/100th-scale values loaded from this row;
             # stamping them would forge provenance and silently lower the gate
             # on the next restart. Leave the existing version (or NULL) alone.
+            # The trading date follows the same rule: it gives the loss figure
+            # a day identity, and legacy figures have none worth asserting.
             if not self.baseline_unverified:
                 state.accounting_version = RISK_ACCOUNTING_VERSION
+                state.daily_loss_date = self._daily_loss_date
 
         await db_write(save_risk_state)
         logger.info("Risk state persisted to DB")
@@ -753,15 +889,28 @@ class RiskManager:
         side: str,
         fill_id: str,
         expected_price: float | None = None,
+        filled_at: datetime | None = None,
     ) -> FillOutcome:
         """Updates authoritative risk state based on actual broker fills.
         Calculates Realized PnL using robust signed arithmetic.
         Idempotent: Checks fill_id against in-memory history.
 
+        ``filled_at`` is the broker's execution time and decides how realized
+        P&L reaches ``current_daily_loss`` (the kill-switch input). A loss is
+        always charged against today's figure. A gain lowers it only when
+        ``filled_at`` is timezone-aware and falls on today's America/New_York
+        trading date; a gain from an earlier session (a fill recovered late
+        after a restart or a poll miss), or with a missing, naive or future time,
+        still moves equity and positions but buys no admission headroom.
+
         Returns a ``FillOutcome`` so the caller can persist realized PnL on a
         closing fill. A duplicate (already-processed) fill returns a neutral
         outcome.
         """
+        # A fill on a new trading day must accumulate into a fresh figure, not
+        # on top of yesterday's; the `_save_state` below persists the new date.
+        self._roll_daily_loss_if_new_day()
+
         if fill_id in self.processed_fill_ids:
             logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
             return FillOutcome()
@@ -833,7 +982,33 @@ class RiskManager:
             realized_pnl = pnl
 
             self.current_equity += realized_pnl
-            self.current_daily_loss -= realized_pnl
+            # Fail-closed session attribution for the kill-switch input: a loss
+            # always tightens today's budget, whatever session it came from; a
+            # gain relaxes it only when the broker time proves the fill is
+            # today's. Otherwise the gain still books to equity but buys no
+            # admission headroom.
+            outside_reason = self._fill_outside_session_reason(filled_at)
+            applied = realized_pnl <= 0 or outside_reason is None
+            if applied:
+                self.current_daily_loss -= realized_pnl
+            if outside_reason is not None:
+                logger.warning(
+                    f"Fill for {ticker} is not provably in the current session ({outside_reason}, filled_at="
+                    f"{filled_at.isoformat() if filled_at is not None else None}). Realized PnL=${realized_pnl:.2f} "
+                    f"{'charged against' if applied else 'NOT credited to'} today's daily loss "
+                    f"(now ${self.current_daily_loss:.2f}).",
+                    extra={
+                        "event_type": "RISK_FILL_OUTSIDE_SESSION",
+                        "ticker": ticker,
+                        "fill_id": fill_id,
+                        "reason": outside_reason,
+                        "filled_at": filled_at.isoformat() if filled_at is not None else None,
+                        "realized_pnl": realized_pnl,
+                        "applied_to_daily_loss": applied,
+                        "trading_date": self._daily_loss_date.isoformat() if self._daily_loss_date else None,
+                        "daily_loss": self.current_daily_loss,
+                    },
+                )
 
             logger.info(
                 f"Fill Processed for {ticker}: Realized PnL=${realized_pnl:.2f}. New DailyLoss=${self.current_daily_loss:.2f}",

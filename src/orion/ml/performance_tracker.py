@@ -8,7 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import Float, bindparam, text
 
 from orion.shared.db_utils import db_write
 from orion.shared.logger import setup_struct_logger
@@ -151,10 +151,18 @@ async def log_outcome(
     async def write(session: Any) -> None:
         # Determine if prediction was correct
         # For entry: correct if hit_target and predicted 1, or didn't and predicted 0
+        #
+        # `:return_pct` appears twice: as the Float column value and inside
+        # `:return_pct >= 0`. asyncpg types each `$n` from its SQL context, so
+        # left untyped it deduced double precision from the assignment and
+        # integer from the comparison and rejected the whole statement
+        # (AmbiguousParameterError, "integer versus double precision") on
+        # every exit. Declaring the bind as Float makes SQLAlchemy render
+        # `$1::FLOAT` at both sites so the deductions agree.
         await session.execute(
             text("""
                 UPDATE ml_predictions
-                SET outcome_ts = NOW(),
+                SET outcome_ts = CURRENT_TIMESTAMP,
                     actual_return_pct = :return_pct,
                     hit_target = :hit_target,
                     hit_stop = :hit_stop,
@@ -168,7 +176,7 @@ async def log_outcome(
                     END
                 WHERE position_id = :position_id
                 AND outcome_ts IS NULL
-            """),
+            """).bindparams(bindparam("return_pct", type_=Float)),
             {
                 "position_id": position_id,
                 "return_pct": actual_return_pct,

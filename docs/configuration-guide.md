@@ -148,19 +148,30 @@ Per-regime risk multipliers live in `config/regime_risk.yaml` (not env-vars).
 | `ORION_ML_PREFILTER_THRESHOLD` | `0.05` | LightGBM score gate before solver vote |
 | `ORION_ML_STALE_MODEL_POLICY` | `warn` | What to do if ML scorer is stale: `skip` = use heuristic fallback, `warn` = load and warn, `bypass` = skip ML gating |
 | `ORION_HEURISTIC_CAP_LIVE` | `0.65` | Maximum heuristic pre-filter score in live mode |
-| `ORION_CIRCUIT_BREAKER_ENABLED` | `false` | Per-strategy breaker |
-| `ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED` | `false` | Global kill on consecutive failures |
+| `ORION_CIRCUIT_BREAKER_ENABLED` | `false` | Per-process broker-error breaker. The global breaker has no disable switch — see [circuit_breaker runbook](runbooks/circuit_breaker.md) |
 | `ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE` | `false` | Forces fresh-rollup gate on live signals |
 
 ## Exit fallback rules
 
-Deterministic exits independent of the ML exit classifier (triggers when classifier is unavailable):
+Deterministic, per-bucket barriers (`execution/exit_fallback_rules.py`) are the
+**primary exit policy**, not a fallback — the ML exit classifier is only
+consulted for a bucket that has a trained model loaded, and only after the
+barriers pass. Defaults live in `DEFAULT_BUCKET_PARAMS` per bucket (`0DTE`,
+`SHORT_SWING`, `SWING`, `POSITION`): profit target, stop loss, min DTE,
+max-hold, drawdown-from-peak, no-progress, and the 0DTE flatten cutoff.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ORION_EXIT_FALLBACK_PROFIT_TARGET_PCT` | `1.00` | Exit when position gains ≥100% (doubles in value) |
-| `ORION_EXIT_FALLBACK_MIN_DTE` | `1` | Exit when option DTE < this value |
-| `ORION_EXIT_FALLBACK_MAX_DRAWDOWN_FROM_PEAK_PCT` | `0.50` | Exit when position drawdown from peak exceeds 50% |
+| `ORION_EXIT_BUCKET_OVERRIDES` | `{}` | JSON, per-bucket, deep-merged over `DEFAULT_BUCKET_PARAMS`, e.g. `{"0DTE": {"profit_target_pct": 0.5}}` |
+
+`min_dte` is a **calendar-day** floor compared **strictly**: the position is
+exited once *fewer* than `min_dte` whole calendar days remain between today's
+New York date and the contract's expiry date — the same DTE count the entry
+rules and the per-bucket entry caps use, so a position is never exited on the
+DTE that admitted it. `min_dte=1` (SHORT_SWING) therefore exits on expiry day,
+`min_dte=2` (SWING, POSITION) exits with one day left, and `min_dte=0` (0DTE)
+disables the rule, leaving the 15:45 ET `flatten_after_et` cutoff as that
+bucket's deadline.
 
 ## Heuristic weights
 

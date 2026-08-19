@@ -103,6 +103,7 @@ line-length = 120
 extend-exclude = [
     "archive",
     "scripts",
+    "research",
 ]
 
 [tool.ruff.lint]
@@ -120,7 +121,7 @@ ignore_missing_imports = true
 warn_unused_configs = true
 warn_redundant_casts = true
 plugins = ["pydantic.mypy"]
-exclude = "(^archive/|^scripts/|^tests/|^alembic/|^ci/)"
+exclude = "(^archive/|^scripts/|^tests/|^alembic/|^ci/|^research/)"
 follow_imports = "skip"
 
 # Type-checking tiers (later override wins on overlap):

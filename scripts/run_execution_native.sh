@@ -114,7 +114,6 @@ export ORION_BASELINE_SOLVER_ID="${ORION_BASELINE_SOLVER_ID:-diversified_baselin
 # Forward-testing knobs — match the docker-compose execution stanza so
 # behaviour is identical to what was running in Docker.
 export ORION_CIRCUIT_BREAKER_ENABLED="${ORION_CIRCUIT_BREAKER_ENABLED:-false}"
-export ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED="${ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED:-false}"
 export ORION_ML_PREFILTER_THRESHOLD="${ORION_ML_PREFILTER_THRESHOLD:-0.05}"
 
 # Alpaca paper mode (overridden by env if operator wants live; mirrors

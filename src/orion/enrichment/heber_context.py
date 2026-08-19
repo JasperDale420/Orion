@@ -16,6 +16,7 @@ from sqlalchemy import func, select
 
 from orion.clients.heber_reader import HeberReader
 from orion.config import system_settings
+from orion.core.market_schedule import MarketSchedule
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 from orion.storage.db import async_session_factory
@@ -37,9 +38,6 @@ DISCOVERY_STATUS_DEGRADED = "DEGRADED"
 
 _heber_reader = HeberReader()
 _recent_regime_snapshots: list[dict[str, Any]] = []
-_latest_greek_exposure: list[dict] = []
-_latest_max_pain: list[dict] = []
-_latest_iv_rank: list[dict] = []
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +131,23 @@ async def _get_active_tickers_from_bronze(limit: int, lookback_hours: int = 24) 
         return [row[0] for row in result.all() if row[0]]
 
 
+def _market_is_closed() -> bool:
+    """True only when the exchange calendar positively reports the market closed.
+
+    A calendar failure cannot be trusted to mean "closed", so it is treated
+    as open — an unreadable calendar must not silence the discovery
+    degradation fence.
+    """
+    try:
+        return not MarketSchedule().is_market_open()
+    except Exception:
+        logger.warning(
+            "Market schedule unavailable during ticker discovery; treating market as open",
+            exc_info=True,
+        )
+        return False
+
+
 async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], str]:
     """Get tickers with recent flow activity and the source used.
 
@@ -141,6 +156,11 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], st
     2. Heber flow_alerts (parquet scan — fallback only; historically OOM-prone)
     3. Heber bars (equity bars)
     4. Static fallback list
+
+    An empty (not failed) bronze result while the market is closed reports
+    the static list under source ``market_closed_idle``: the 24h lookback
+    ages out every weekend, which is expected quiet rather than a discovery
+    outage and must not accumulate into a DEGRADED trade block at the open.
     """
     # Primary: DB-backed, indexed, bounded. This is the ONLY hot-path source —
     # all Heber parquet scanning was removed from the discovery hot path after
@@ -180,6 +200,8 @@ async def get_active_tickers_with_source(limit: int = 20) -> tuple[list[str], st
                 },
             )
             return bars_tickers, "heber"
+    elif _market_is_closed():
+        return STATIC_TICKER_FALLBACK[:limit], "market_closed_idle"
 
     return STATIC_TICKER_FALLBACK[:limit], "static_fallback"
 
@@ -398,90 +420,6 @@ async def get_spy_cumulative_return() -> float:
 
 
 # ---------------------------------------------------------------------------
-# Greek exposure (Heber reads)
-# ---------------------------------------------------------------------------
-
-
-def get_latest_greek_exposure(tickers: list[str]) -> list[dict]:
-    """Get latest greek exposure data from Heber for the given tickers."""
-    global _latest_greek_exposure
-    try:
-        now_utc = datetime.now(UTC)
-        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        df = _heber_reader.read_greek_exposure(
-            symbols=tickers,
-            asof_time=now_utc,
-            start_time=today_start_utc,
-        )
-        if df.empty:
-            _latest_greek_exposure = []
-            return []
-        records = df.to_dict("records")
-        _latest_greek_exposure = records
-        logger.info("heber_greek_exposure_read", rows=len(records))
-        return records
-    except Exception:
-        logger.warning("Heber greek exposure read failed", exc_info=True)
-        return []
-
-
-# ---------------------------------------------------------------------------
-# Max pain (Heber reads)
-# ---------------------------------------------------------------------------
-
-
-def get_latest_max_pain(tickers: list[str]) -> list[dict]:
-    """Get latest max pain data from Heber for the given tickers."""
-    global _latest_max_pain
-    try:
-        now_utc = datetime.now(UTC)
-        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        df = _heber_reader.read_max_pain(
-            symbols=tickers,
-            asof_time=now_utc,
-            start_time=today_start_utc,
-        )
-        if df.empty:
-            _latest_max_pain = []
-            return []
-        records = df.to_dict("records")
-        _latest_max_pain = records
-        logger.info("heber_max_pain_read", rows=len(records))
-        return records
-    except Exception:
-        logger.warning("Heber max pain read failed", exc_info=True)
-        return []
-
-
-# ---------------------------------------------------------------------------
-# IV rank (Heber reads)
-# ---------------------------------------------------------------------------
-
-
-def get_latest_iv_rank(tickers: list[str]) -> list[dict]:
-    """Get latest IV rank data from Heber for the given tickers."""
-    global _latest_iv_rank
-    try:
-        now_utc = datetime.now(UTC)
-        today_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
-        df = _heber_reader.read_iv_rank(
-            symbols=tickers,
-            asof_time=now_utc,
-            start_time=today_start_utc,
-        )
-        if df.empty:
-            _latest_iv_rank = []
-            return []
-        records = df.to_dict("records")
-        _latest_iv_rank = records
-        logger.info("heber_iv_rank_read", rows=len(records))
-        return records
-    except Exception:
-        logger.warning("Heber IV rank read failed", exc_info=True)
-        return []
-
-
-# ---------------------------------------------------------------------------
 # Regime snapshot persistence
 # ---------------------------------------------------------------------------
 
@@ -579,12 +517,13 @@ async def seed_regime_snapshots_from_db(limit: int = 500) -> None:
 def _is_discovery_degraded(source: str, streak: int, warn_streak: int) -> bool:
     """Pure logic: is discovery in a degraded state?
 
-    Healthy sources (`bronze_db`, `heber`) are never degraded. Static
-    fallback is degraded only after the streak crosses the warn threshold —
-    matching the existing warn-log semantics so we don't block trading on
-    transient single-cycle blips.
+    Healthy sources (`bronze_db`, `heber`) are never degraded, nor is
+    `market_closed_idle` (empty bronze outside market hours is expected
+    quiet, not an outage). Static fallback is degraded only after the streak
+    crosses the warn threshold — matching the existing warn-log semantics so
+    we don't block trading on transient single-cycle blips.
     """
-    if source in ("bronze_db", "heber"):
+    if source in ("bronze_db", "heber", "market_closed_idle"):
         return False
     return streak >= warn_streak
 

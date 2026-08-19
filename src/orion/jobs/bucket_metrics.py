@@ -10,21 +10,29 @@ Verdicts follow the sample-size discipline from the 2026-07 recovery plan:
 under 30 closed trades touch nothing; at 100 the first expectancy verdict
 is meaningful (SE of a ~40% win rate is ±5pp); sizing up requires n>=100,
 positive expectancy, and PF>=1.15; a trailing-50 PF under 0.6 flags the
-bucket for halting. Actionable verdicts are ADVISORY Discord alerts; routine
-results remain in structured logs and never act.
+bucket for halting.
+
+The halting verdict acts: it opens a time-boxed per-bucket entry halt (see
+``orion.jobs.bucket_halt``) that ``preflight_live_signal`` enforces on new
+entries only. Every other verdict stays advisory — sizing up is still a human
+decision — and routine results remain in structured logs.
 """
 
 from __future__ import annotations
 
+import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
+from orion.execution.exit_costs import realized_exit_slippage
 from orion.execution.exit_fallback_rules import bucket_for_dte
+from orion.jobs.bucket_halt import record_halt, release_expired_halts
 from orion.shared.db_utils import db_query
 from orion.shared.logger import setup_struct_logger
+from orion.storage.models_execution import FillRecord
 from orion.storage.models_gold import CandidateTrade, ExitDecision
 from orion.storage.models_trade_journal import TradeJournalEntry
 
@@ -99,16 +107,44 @@ class GroupStats:
         }
 
 
+# Realized exit-cost fields aggregated per bucket. Slippage vs the quote mid is
+# the market's price of the exit; slippage vs the mark the rule evaluated is our
+# own — a wide gap there means rules are firing on stale marks.
+_SLIPPAGE_FIELDS = ("slippage_vs_mid_usd", "slippage_vs_mid_pct", "slippage_vs_mark_usd")
+
+# Stands in for a lot whose entry bucket cannot be derived. Never an aggregation
+# key — its only job is to make a close that touched such a lot fail the
+# single-bucket test instead of being charged to a bucket we guessed.
+UNKNOWN_BUCKET = "__unknown__"
+
+
+def _summarize_slippage(samples: list[dict[str, float | None]]) -> dict[str, Any]:
+    """Median/mean of each realized exit-cost field. ``n`` counts closes that had
+    BOTH a captured exit quote and a matching fill; a field stays None when no
+    sample could supply it (a mark-only quote measures no mid)."""
+    out: dict[str, Any] = {"n": len(samples)}
+    for name in _SLIPPAGE_FIELDS:
+        values = [v for s in samples if (v := s.get(name)) is not None]
+        suffix = name.removeprefix("slippage_")
+        out[f"median_{suffix}"] = round(statistics.median(values), 4) if values else None
+        out[f"mean_{suffix}"] = round(statistics.fmean(values), 4) if values else None
+    return out
+
+
 async def compute_bucket_metrics(days: int = 30) -> dict[str, Any]:
     """Aggregate closed-trade performance by bucket and by rule.
 
     Closed = realized_pnl set. Bucket = entry-DTE classification (same
     convention as the entry caps). Exit reason = the latest exit_decisions
     row for the same candidate (expiry sweeps carry notes='expired_worthless').
+
+    Each bucket also carries `exit_slippage`: what the closes in that bucket
+    actually cost, from the quote captured at close submission against the
+    realized fill. Log-only — it feeds no verdict.
     """
     cutoff = datetime.now(UTC) - timedelta(days=days)
 
-    async def read(session: Any) -> tuple[list[Any], list[Any]]:
+    async def read(session: Any) -> tuple[list[Any], list[Any], list[Any], list[Any], list[Any]]:
         closed = (
             await session.execute(
                 select(
@@ -119,6 +155,7 @@ async def compute_bucket_metrics(days: int = 30) -> dict[str, Any]:
                     TradeJournalEntry.notes,
                     CandidateTrade.rule_id,
                     CandidateTrade.expiration_date,
+                    TradeJournalEntry.raw_json,
                 )
                 .join(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
                 .where(
@@ -141,22 +178,124 @@ async def compute_bucket_metrics(days: int = 30) -> dict[str, Any]:
                 .order_by(ExitDecision.exit_ts_utc.desc())
             )
         ).all()
-        return list(closed), list(exits)
+        # Exit rows carrying a close-time quote, and the fills that realized
+        # them. `fills` holds ONE row per broker order with the broker's
+        # CUMULATIVE qty/avg price, so a close that filled in several partials
+        # still yields a single realized price.
+        quoted_exits = (
+            await session.execute(
+                select(
+                    ExitDecision.exit_id,
+                    ExitDecision.broker_order_id,
+                    ExitDecision.details,
+                    ExitDecision.ticker,
+                ).where(ExitDecision.exit_ts_utc >= cutoff, ExitDecision.details.is_not(None))
+            )
+        ).all()
+        exit_fills = (
+            await session.execute(
+                select(
+                    FillRecord.broker_order_id,
+                    FillRecord.client_order_id,
+                    FillRecord.filled_avg_price,
+                    FillRecord.side,
+                    FillRecord.ticker,
+                ).where(FillRecord.filled_at_utc >= cutoff, FillRecord.filled_avg_price.is_not(None))
+            )
+        ).all()
+        # EVERY lot a close order touched, whether or not that lot is fully
+        # realized. The allocator books a leg before a lot closes, so one order
+        # can fully close one lot and partially close another; reading only the
+        # realized lots would hide the second and make a two-bucket order look
+        # single-bucket.
+        #
+        # Scoped by CONTRACT, not by time. Both timestamps on a journal row are
+        # the LAST-applied leg's, and the EOD reconcile can book an older missed
+        # fill after a newer one — so a row-level time filter could drop a lot
+        # that shares an in-window order with another lot, silently collapsing a
+        # two-bucket order to one. Every lot a close order can touch matches that
+        # order's contract on the SAME predicate `allocate_exit_in_session` uses
+        # to find lots — an OR across the candidate's OCC symbol and the journal
+        # ticker, NOT a coalesce: an option lot carries the underlying in
+        # `ticker` and the contract in `option_symbol`, and the allocator can
+        # match on either. So the contracts closed in the window bound the scan
+        # without dropping an out-of-order leg.
+        #
+        # OUTER join because a lot can legitimately have no candidate row (the
+        # allocator resolves underlying-ticker lots too) — those must stay in
+        # the map as a bucket we cannot name, not vanish and leave a mixed close
+        # looking single-bucket.
+        # Only the contracts of exits that actually CARRY a capture — a close is
+        # measurable only if it has one, and its exit_decisions row carries the
+        # same contract the fill does. The `details IS NOT NULL` filter above is
+        # NOT that test: `persist_exit_decision` always writes a details dict, so
+        # every exit passes it, including equity exits and rows written before
+        # capture existed. An equity ticker reaching this set would put the
+        # UNDERLYING in the OR predicate below and pull in every historical
+        # option lot on it — an option lot's journal `ticker` is the underlying.
+        contracts = {
+            t for (*_, details, t) in quoted_exits if t and isinstance(details, dict) and "exit_quote" in details
+        }
+        allocated = []
+        if contracts:
+            allocated = (
+                await session.execute(
+                    select(
+                        TradeJournalEntry.filled_at_utc,
+                        CandidateTrade.candidate_id,
+                        CandidateTrade.expiration_date,
+                        TradeJournalEntry.raw_json,
+                    )
+                    .outerjoin(CandidateTrade, CandidateTrade.candidate_id == TradeJournalEntry.candidate_id)
+                    .where(
+                        TradeJournalEntry.exit_broker_order_id.is_not(None),
+                        or_(
+                            CandidateTrade.option_symbol.in_(sorted(contracts)),
+                            TradeJournalEntry.ticker.in_(sorted(contracts)),
+                        ),
+                    )
+                )
+            ).all()
+        return list(closed), list(exits), list(quoted_exits), list(exit_fills), list(allocated)
 
-    closed, exits = await db_query(read)
+    closed, exits, quoted_exits, exit_fills, allocated = await db_query(read)
 
     # Latest exit rule per candidate (rows arrive newest-first).
     exit_rule_by_candidate: dict[str, str] = {}
     for candidate_id, rule_id, _ts in exits:
         exit_rule_by_candidate.setdefault(candidate_id, rule_id)
 
+    def _bucket_of(filled_at: Any, expiration: Any) -> str:
+        dte = (expiration.date() - filled_at.date()).days if expiration is not None and filled_at is not None else None
+        return bucket_for_dte(dte)
+
+    def _leg_order_ids(raw_json: Any) -> list[str]:
+        legs = raw_json.get("exit_allocations") if isinstance(raw_json, dict) else None
+        return [
+            str(leg["order_id"])
+            for leg in (legs if isinstance(legs, list) else [])
+            if isinstance(leg, dict) and leg.get("order_id")
+        ]
+
+    # Broker order id of each close leg → the entry bucket(s) of every lot it
+    # touched, realized or not. An exit_decisions row carries no candidate link
+    # (it means "a close was submitted", not "the position is closed"), so the
+    # journal's per-order exit ledger is the bridge. A lot with no candidate row
+    # has no derivable DTE, so it enters the map as UNKNOWN_BUCKET rather than
+    # as `bucket_for_dte(None)`, whose SWING default would fabricate a bucket.
+    buckets_by_exit_order: dict[str, set[str]] = {}
+    for filled_at, candidate_id, expiration, raw_json in allocated:
+        bucket = _bucket_of(filled_at, expiration) if candidate_id is not None else UNKNOWN_BUCKET
+        for order_id in _leg_order_ids(raw_json):
+            buckets_by_exit_order.setdefault(order_id, set()).add(bucket)
+
     by_bucket: dict[str, GroupStats] = {}
     by_rule: dict[str, GroupStats] = {}
-    for candidate_id, pnl, filled_at, exit_filled_at, notes, rule_id, expiration in closed:
-        dte = None
-        if expiration is not None and filled_at is not None:
-            dte = (expiration.date() - filled_at.date()).days
-        bucket = bucket_for_dte(dte)
+    # Orders that closed out at least one lot: cost is measured on CLOSED trades
+    # only, matching the rest of this report.
+    realized_exit_orders: set[str] = set()
+    for candidate_id, pnl, filled_at, exit_filled_at, notes, rule_id, expiration, raw_json in closed:
+        bucket = _bucket_of(filled_at, expiration)
 
         hold_hours = None
         if filled_at is not None and exit_filled_at is not None:
@@ -170,11 +309,124 @@ async def compute_bucket_metrics(days: int = 30) -> dict[str, Any]:
         by_bucket.setdefault(bucket, GroupStats()).add(float(pnl), hold_hours, exit_reason)
         by_rule.setdefault(rule_id or "unknown", GroupStats()).add(float(pnl), hold_hours, exit_reason)
 
+        realized_exit_orders.update(_leg_order_ids(raw_json))
+
+    fills_by_broker: dict[str, tuple[str, float, str | None]] = {}
+    fills_by_client: dict[str, tuple[str, float, str | None]] = {}
+    for broker_id, client_id, price, side, _fill_ticker in exit_fills:
+        if not broker_id or price is None:
+            continue
+        fill = (str(broker_id), float(price), side)
+        fills_by_broker.setdefault(str(broker_id), fill)
+        if client_id:
+            fills_by_client.setdefault(str(client_id), fill)
+
+    slippage_by_bucket: dict[str, list[dict[str, float | None]]] = {}
+    seen_orders: set[str] = set()
+    # Mutually exclusive and exhaustive: quoted_exits == measured + the four
+    # exclusion counters + duplicate_order.
+    coverage = dict.fromkeys(
+        (
+            "quoted_exits",
+            "no_matching_fill",
+            "filled_without_journal_bridge",
+            "filled_lot_still_open",
+            "excluded_multi_bucket",
+            "duplicate_order",
+            "unknown_bucket",
+            "unusable_quote",
+            "malformed_quote",
+            "capture_error",
+        ),
+        0,
+    )
+    for exit_id, exit_broker_order_id, details, _ticker in quoted_exits:
+        if not isinstance(details, dict) or "exit_quote" not in details:
+            continue
+        # Counted the moment a row CLAIMS a capture, before its shape is
+        # trusted: a null/string/list value is a capture regression, and
+        # skipping it before the denominator would hide that regression behind
+        # an invariant that still balances.
+        coverage["quoted_exits"] += 1
+        quote = details["exit_quote"]
+        if not isinstance(quote, dict):
+            coverage["malformed_quote"] += 1
+            continue
+        if "error" in quote:
+            # The close path stores {"error": ...} when capture itself failed.
+            # Kept separate from `unusable_quote` (a well-formed quote with no
+            # usable benchmark) so a systemic capture bug is visible on its own.
+            coverage["capture_error"] += 1
+            continue
+        # `exit_id` IS the client_order_id, so a close whose submit response
+        # carried no broker id is still matched through the fill.
+        fill = fills_by_broker.get(str(exit_broker_order_id)) if exit_broker_order_id else None
+        if fill is None:
+            fill = fills_by_client.get(str(exit_id))
+        if fill is None:
+            # No orion-attributed fill at all: an unfilled/cancelled close, or a
+            # native escalation (the Gateway's DELETE carries no
+            # client_order_id, so its fill is dropped by the orion_ prefix
+            # filter). Counted, not silently dropped — escalations are the
+            # expensive exits, and a mean that quietly omits them reads better
+            # than reality.
+            coverage["no_matching_fill"] += 1
+            continue
+        fill_broker_id, fill_price, fill_side = fill
+        # One sample per closing order, never per fill event: the fills row
+        # holds the broker's CUMULATIVE qty/avg, so partials are already one
+        # price. A second decision row resolving to the same order would be a
+        # double count.
+        if fill_broker_id in seen_orders:
+            coverage["duplicate_order"] += 1
+            continue
+        seen_orders.add(fill_broker_id)
+        buckets = buckets_by_exit_order.get(fill_broker_id)
+        if not buckets:
+            # The fill exists but no journal lot records it: allocation failed
+            # or has not been reconciled yet. Kept distinct from "never filled"
+            # — this one is a repair signal, not an unmeasurable exit.
+            coverage["filled_without_journal_bridge"] += 1
+            continue
+        if len(buckets) > 1:
+            # One order touched lots from different entry-DTE buckets. It has a
+            # single realized price, so charging it to one of them would misstate
+            # that bucket's cost — exclude and count it instead of guessing.
+            coverage["excluded_multi_bucket"] += 1
+            continue
+        bucket = next(iter(buckets))
+        if bucket == UNKNOWN_BUCKET:
+            coverage["unknown_bucket"] += 1
+            continue
+        if fill_broker_id not in realized_exit_orders:
+            # Bridged, but every lot it touched is still partially open; cost is
+            # measured on closed trades, so it counts once the lot closes.
+            coverage["filled_lot_still_open"] += 1
+            continue
+        slippage = realized_exit_slippage(quote, fill_price, side=fill_side or "sell")
+        if all(v is None for v in slippage.values()):
+            # A well-formed quote with no usable benchmark (no mid, no mark).
+            # Counting it would claim coverage for a close whose cost is
+            # entirely unknown.
+            coverage["unusable_quote"] += 1
+            continue
+        slippage_by_bucket.setdefault(bucket, []).append(slippage)
+
+    bucket_summaries = {k: v.summary() for k, v in sorted(by_bucket.items())}
+    for bucket_name, summary in bucket_summaries.items():
+        summary["exit_slippage"] = _summarize_slippage(slippage_by_bucket.get(bucket_name, []))
+
     return {
         "window_days": days,
         "closed_trades": len(closed),
-        "by_bucket": {k: v.summary() for k, v in sorted(by_bucket.items())},
+        "by_bucket": bucket_summaries,
         "by_rule": {k: v.summary() for k, v in sorted(by_rule.items())},
+        # The denominator for every per-bucket `exit_slippage`: how much of the
+        # exit flow the cost figures actually cover, and why the rest is out.
+        # A large `no_matching_fill` means the measured sample is a biased
+        # subset (escalated closes are unmeasurable); a non-zero
+        # `filled_without_journal_bridge` means an allocation needs repair.
+        "exit_cost_coverage": {**coverage, "measured": sum(len(v) for v in slippage_by_bucket.values())},
     }
 
 
@@ -191,8 +443,47 @@ def _format_summary(metrics: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+async def apply_halt_verdicts(metrics: dict[str, Any], *, now: datetime | None = None) -> list[str]:
+    """Turn ``consider_halting`` verdicts into durable per-bucket entry halts.
+
+    Releases lapsed halts first, so a bucket that has served its window starts
+    its sampling window before this pass re-measures it. A bucket that is still
+    failing after that window is simply halted again. Returns one
+    human-readable line per action taken, for the nightly alert.
+    """
+    actions = [
+        f"resumed {halt.bucket} — sampling until {halt.expires_after_session.isoformat()}"
+        for halt in await release_expired_halts(now=now)
+    ]
+
+    for bucket, stats in metrics["by_bucket"].items():
+        # The same criterion GroupStats.summary applies, restated so a caller
+        # cannot hand us a halting verdict without the sample behind it.
+        if stats["verdict"] != "consider_halting" or (stats.get("n") or 0) < HALT_TRAILING_WINDOW:
+            continue
+        write = await record_halt(
+            bucket,
+            profit_factor=stats.get("trailing_pf"),
+            n_closed=stats.get("n"),
+            now=now,
+            reason=f"trailing-{HALT_TRAILING_WINDOW} PF below {HALT_TRAILING_PROFIT_FACTOR}",
+        )
+        # Never silent about a halt the criterion asked for but did not get:
+        # each of these is something the operator has to be able to see.
+        if write.outcome == "written" and write.halt is not None:
+            actions.append(f"HALTED {write.halt.describe()}")
+        elif write.outcome == "operator_halt_present":
+            actions.append(f"{bucket} halt suppressed by a live operator halt — clear it to re-arm the automatic one")
+        elif write.outcome == "resuming" and write.halt is not None:
+            actions.append(
+                f"{bucket} still failing but sampling until "
+                f"{write.halt.expires_after_session.isoformat()} — no new halt yet"
+            )
+    return actions
+
+
 async def run_bucket_metrics(days: int = 30, post_discord: bool = True) -> dict[str, Any]:
-    """Compute and log nightly metrics; page only actionable verdicts."""
+    """Compute and log nightly metrics; act on halts and page actionable verdicts."""
     metrics = await compute_bucket_metrics(days=days)
     logger.info(
         "bucket_metrics",
@@ -200,17 +491,31 @@ async def run_bucket_metrics(days: int = 30, post_discord: bool = True) -> dict[
         closed_trades=metrics["closed_trades"],
         by_bucket=metrics["by_bucket"],
         by_rule=metrics["by_rule"],
+        exit_cost_coverage=metrics.get("exit_cost_coverage"),
     )
+
+    # The halt is an addition to the advisory path, not a replacement for it:
+    # a failure to write one must still leave the verdict alert to be sent.
+    halt_actions: list[str] = []
+    try:
+        halt_actions = await apply_halt_verdicts(metrics)
+    except Exception as e:
+        logger.error("bucket_halt_apply_failed", error=str(e), exc_info=True)
+        halt_actions = [f"halt update FAILED: {e}"]
+
     flagged = [
         f"{name} → {s['verdict']}"
         for name, s in metrics["by_bucket"].items()
         if s["verdict"] in ("consider_sizing_up", "consider_halting")
     ]
-    if post_discord and flagged:
+    if post_discord and (flagged or halt_actions):
         from orion.shared.alerts import send_discord_alert
 
         text = _format_summary(metrics)
-        text += "\n⚠ verdicts: " + "; ".join(flagged)
+        if flagged:
+            text += "\n⚠ verdicts: " + "; ".join(flagged)
+        if halt_actions:
+            text += "\n⛔ entry halts: " + "; ".join(halt_actions)
         await send_discord_alert(text, dedupe_key="bucket_metrics_nightly")
     return metrics
 

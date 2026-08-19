@@ -10,6 +10,7 @@ exit classifier sees None for all entry-context features.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -19,11 +20,20 @@ import pytest
 
 from orion.execution.position_monitor import (
     PositionMonitor,
+    _expiry_from_occ_symbol,
     _is_occ_option_symbol,
 )
+from orion.ml.exit_classifier import BucketExitClassifier
 from orion.storage.db import async_session_factory
 from orion.storage.models_execution import OrderRecord
 from orion.storage.models_gold import CandidateTrade, StrategyDecision
+
+
+def _classifier_with_all_buckets() -> BucketExitClassifier:
+    """A classifier with a model for every bucket, detached from the singleton."""
+    classifier = BucketExitClassifier()
+    classifier.models = {b: object() for b in ("0DTE", "SHORT_SWING", "SWING", "POSITION")}
+    return classifier
 
 
 @pytest.mark.unit
@@ -115,6 +125,10 @@ async def test_fetch_entry_context_populates_enrichment_fields_for_option_positi
         await session.commit()
 
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
 
     fake_enrichment = {
         "iv_rank_at_entry": 42.5,
@@ -126,7 +140,7 @@ async def test_fetch_entry_context_populates_enrichment_fields_for_option_positi
     }
 
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value=fake_enrichment),
     ) as mock_enrich:
         context = await monitor._fetch_entry_context(option_symbol)
@@ -152,19 +166,16 @@ async def test_fetch_entry_context_populates_enrichment_fields_for_option_positi
     assert context["market_tide_30m"] == -3.4e6
 
     # Enricher called with the expected derived args.
+    # The exit-feature enricher needs only the ticker and the entry timestamp;
+    # the four features ExitFeatures carries are all keyed off those.
     assert mock_enrich.call_count == 1
     call_kwargs = mock_enrich.call_args.kwargs
     assert call_kwargs["ticker"] == ticker
-    assert call_kwargs["put_call"] == "C"
-    assert call_kwargs["dte"] == 14
-    assert call_kwargs["premium_usd"] == 12500.0
-    assert call_kwargs["event_id"] == "evt_test_123"
-    assert call_kwargs["is_sweep"] is True
-    assert call_kwargs["option_chain"] == option_symbol
+    assert call_kwargs["entry_ts"] == context["entry_time"]
 
     # Second call hits the in-memory cache — no extra DB or enricher work.
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value={"iv_rank_at_entry": 999.0}),
     ) as mock_enrich_2:
         cached = await monitor._fetch_entry_context(option_symbol)
@@ -244,6 +255,10 @@ async def test_sync_positions_propagates_entry_context_to_tracked_position() -> 
         await session.commit()
 
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
 
     connector = SimpleNamespace(
         get_all_positions=lambda: [
@@ -265,7 +280,7 @@ async def test_sync_positions_propagates_entry_context_to_tracked_position() -> 
     }
 
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value=fake_enrichment),
     ):
         tracked = await monitor.sync_positions(connector)
@@ -294,12 +309,16 @@ async def test_fetch_entry_context_returns_default_for_unknown_symbol() -> None:
     from datetime import UTC, datetime, timedelta
 
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
     # Expiry far in the future → current DTE > 14 → POSITION bucket.
     far_expiry = (datetime.now(UTC) + timedelta(days=200)).strftime("%y%m%d")
     unknown = f"TSLA{far_expiry}C00300000"
 
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value={}),
     ) as mock_enrich:
         ctx_1 = await monitor._fetch_entry_context(unknown)
@@ -316,11 +335,137 @@ async def test_fetch_entry_context_returns_default_for_unknown_symbol() -> None:
 async def test_fetch_entry_context_swing_default_for_non_occ_symbol() -> None:
     """A non-OCC (equity) symbol has no embedded expiry — falls back to SWING."""
     monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
 
     with patch(
-        "orion.ml.flow_enricher.enrich_flow_for_scoring",
+        "orion.ml.flow_enricher.enrich_flow_for_exit_features",
         new=AsyncMock(return_value={}),
     ):
         ctx = await monitor._fetch_entry_context("TSLA")
 
     assert ctx == {"bucket": "SWING"}
+
+
+def _one_position_connector(symbol: str, unrealized_plpc: float = 0.0) -> SimpleNamespace:
+    return SimpleNamespace(
+        get_all_positions=lambda: [
+            SimpleNamespace(
+                symbol=symbol,
+                current_price=2.0 * (1 + unrealized_plpc),
+                avg_entry_price=2.0,
+                qty=1.0,
+                unrealized_plpc=unrealized_plpc,
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_entry_context_timeout_derives_bucket_from_occ_and_does_not_cache() -> None:
+    """A timed-out entry-context fetch must not freeze the position as SWING.
+
+    July 2026: 85 `entry_context_timeout` events, and every affected contract —
+    0DTE included — ran SWING exit parameters for the life of the process
+    because the timeout fallback was cached. The contract symbol carries the
+    expiry, so the bucket and expiry are derivable without the database, and
+    the real context must stay resolvable rather than being frozen at the
+    fallback.
+    """
+    monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
+    monitor._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 0.01
+    today = datetime.now(UTC).strftime("%y%m%d")
+    symbol = f"SPY{today}C00500000"
+
+    attempts: list[str] = []
+
+    async def _hang(sym: str) -> dict:
+        attempts.append(sym)
+        await asyncio.sleep(5)
+        return {}
+
+    monitor._fetch_entry_context = _hang  # type: ignore[method-assign]
+
+    tracked = await monitor.sync_positions(_one_position_connector(symbol))
+
+    assert attempts == [symbol]
+    assert len(tracked) == 1
+    pos = tracked[0]
+    assert pos.bucket == "0DTE"
+    assert pos.expiry_date == _expiry_from_occ_symbol(symbol)
+    assert symbol not in monitor._entry_context_cache, "timeout fallback must not be cached"
+
+    # The next cycle joins the in-flight resolution rather than launching a
+    # second one. Re-running the fetch every cycle is what drove the
+    # 2026-08-17 incident (714 repeats of an 80s scan cascade in one session).
+    await monitor.sync_positions(_one_position_connector(symbol))
+
+    assert attempts == [symbol]
+    assert pos.bucket == "0DTE", "position must keep the contract-derived bucket while unresolved"
+    assert symbol not in monitor._entry_context_cache
+
+    monitor._discard_entry_context(symbol)
+
+
+@pytest.mark.asyncio
+async def test_entry_context_arriving_after_timeout_is_applied_to_tracked_position() -> None:
+    """When the retried fetch succeeds, the already-tracked position picks up the
+    real context (bucket, entry time, decision id) and keeps its running stats."""
+    monitor = PositionMonitor()
+    # Entry-context enrichment only runs when the position's own bucket has a
+    # trained exit model, since its four features feed only that vector. A
+    # detached classifier keeps this out of the process-wide singleton.
+    monitor.exit_classifier = _classifier_with_all_buckets()
+    monitor._ENTRY_CONTEXT_FETCH_TIMEOUT_SECONDS = 0.01
+    today = datetime.now(UTC).strftime("%y%m%d")
+    symbol = f"SPY{today}C00500000"
+    real_entry_ts = datetime.now(UTC) - timedelta(hours=3)
+    real_context = {
+        "decision_id": "dec-late",
+        "option_symbol": symbol,
+        "premium_usd": 1200.0,
+        "dte": 5,
+        "bucket": "SWING",
+        "direction": "LONG",
+        "entry_time": real_entry_ts,
+        "expiry_date": None,
+    }
+    calls = 0
+
+    async def _slow_then_ok(sym: str) -> dict:
+        nonlocal calls
+        calls += 1
+        # Overruns the cycle budget, so the first cycle falls back to the
+        # contract-derived bucket while resolution continues in the background.
+        await asyncio.sleep(0.2)
+        monitor._entry_context_cache[sym] = real_context
+        return real_context
+
+    monitor._fetch_entry_context = _slow_then_ok  # type: ignore[method-assign]
+
+    (pos,) = await monitor.sync_positions(_one_position_connector(symbol, unrealized_plpc=0.30))
+    assert pos.bucket == "0DTE"
+    assert pos.decision_id is None
+    assert pos.max_return_pct == pytest.approx(30.0)
+
+    # The overrunning resolution is not cancelled — it completes and caches.
+    await asyncio.gather(*list(monitor._entry_context_tasks.values()))
+
+    (same_pos,) = await monitor.sync_positions(_one_position_connector(symbol, unrealized_plpc=0.10))
+
+    assert same_pos is pos
+    assert pos.bucket == "SWING"
+    assert pos.decision_id == "dec-late"
+    assert pos.entry_time == real_entry_ts
+    assert pos.premium_usd == 1200.0
+    assert pos.expiry_date == _expiry_from_occ_symbol(symbol)
+    # Running envelope survives the late context.
+    assert pos.max_return_pct == pytest.approx(30.0)
+    # Resolved once, not once per cycle.
+    assert calls == 1

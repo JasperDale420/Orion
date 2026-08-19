@@ -8,7 +8,7 @@ Used by both the price target labeler (historical) and ML scorer (real-time).
 import asyncio
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from orion.labeler.feature_extraction import (
     get_darkpool_metrics as get_labeler_darkpool_metrics,
@@ -278,6 +278,53 @@ async def enrich_flow_for_scoring(
     )
 
     return enriched
+
+
+async def enrich_flow_for_exit_features(ticker: str, entry_ts: datetime) -> dict[str, Any]:
+    """Entry-context features for the exit classifier, and nothing else.
+
+    `ExitFeatures` carries exactly four of the ~60 fields
+    `enrich_flow_for_scoring` builds — iv_rank, vix, gex and market_tide at
+    entry — and the position monitor discards the rest. Resolving the full set
+    on the exit daemon meant scanning datasets no exit feature reads: a
+    370-day bars scan for `high_52w_distance_pct` (measured 80s and 7.26GB
+    peak), 365 days of max-pain and unfiltered flow, and a week of darkpool.
+
+    This resolves only the four, so a loaded model sees exactly the same
+    feature vector for a fraction of the work. Each lookup degrades to None
+    independently; the classifier already substitutes defaults for missing
+    entry context.
+    """
+
+    async def _gex_snapshot_only() -> dict[str, Any]:
+        # Deliberately not `_get_gex_at_entry`: that wrapper follows a
+        # successful snapshot with a 20-day rolling-average read whose values
+        # this payload discards — an extra serialized Heber scan for nothing.
+        snapshot = await get_labeler_gex_at_entry(ticker, entry_ts)
+        return snapshot if isinstance(snapshot, dict) else {}
+
+    results = await asyncio.gather(
+        _gex_snapshot_only(),
+        _get_market_tide(entry_ts),
+        _get_iv_rank(ticker, entry_ts),
+        _get_vix(entry_ts),
+        return_exceptions=True,
+    )
+    for task_name, result in zip(("gex", "market_tide", "iv_rank", "vix"), results, strict=True):
+        if isinstance(result, BaseException):
+            _record_enricher_fallback(task_name, cast(Exception, result), ticker=ticker)
+
+    gex_data = results[0] if isinstance(results[0], dict) else {}
+    tide_data = results[1] if isinstance(results[1], dict) else {}
+    iv_rank = results[2] if isinstance(results[2], int | float) else None
+    vix = results[3] if isinstance(results[3], int | float) else None
+
+    return {
+        "iv_rank_at_entry": iv_rank,
+        "vix_at_entry": vix,
+        "gex_at_entry": gex_data.get("gex"),
+        "market_tide_30m": tide_data.get("net_premium"),
+    }
 
 
 def _get_minutes_to_close(ts: datetime) -> int:

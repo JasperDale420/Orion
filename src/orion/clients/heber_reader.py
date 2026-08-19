@@ -440,7 +440,23 @@ class HeberReader:
         if instrument_keys:
             filters.append(("instrument_key", "in", instrument_keys))
 
-        df = self._read_parquet(silver_path, filters=filters)
+        # Heber derives each silver dt= partition from the row's UTC ts_event,
+        # so a bounded read only needs partitions on/after start_time's UTC
+        # date. Without this every file in the feed (183k+ for bars, back to
+        # 2024) has its footer opened per call, and the row-level filter below
+        # then throws almost all of it away. Unbounded reads keep full history.
+        min_dt = self._to_utc_timestamp(start_time).date() if start_time is not None else None
+
+        # min_dt only prunes by date, not by instrument_type=. Each feed is
+        # ALSO hive-partitioned by instrument_type (equity/crypto/option), and
+        # some instrument_type partitions (crypto bars) accumulate thousands
+        # of tiny uncompacted per-write files per day that an equity-only
+        # instrument_key filter can never match. Scoping the search to the
+        # single instrument_type= actually requested skips those files
+        # entirely instead of opening and then discarding them.
+        read_path = self._scope_to_instrument_type(silver_path, instrument_keys)
+
+        df = self._read_parquet(read_path, filters=filters, min_dt=min_dt)
         if df.empty:
             return df
 
@@ -456,6 +472,27 @@ class HeberReader:
         if not symbols:
             return []
         return [f"equity:{symbol.upper()}" for symbol in symbols if symbol]
+
+    @staticmethod
+    def _scope_to_instrument_type(feed_path: Path, instrument_keys: list[str] | None) -> Path:
+        """Narrow a feed path to its instrument_type= subdir when unambiguous.
+
+        Every silver feed is hive-partitioned by instrument_type (equity/
+        crypto/option) above the dt= partitions. When every requested
+        instrument_key shares one type and that subdir exists, searching it
+        directly is equivalent to searching the full feed (files outside it
+        can never match an instrument_key filter for a different type) but
+        skips opening every file under unrelated instrument_type partitions.
+        Falls back to the unscoped feed path for symbol-less reads (e.g.
+        market_tide), mixed-type requests, or an unexpected layout.
+        """
+        if not instrument_keys:
+            return feed_path
+        types = {key.split(":", 1)[0] for key in instrument_keys if ":" in key}
+        if len(types) != 1:
+            return feed_path
+        scoped = feed_path / f"instrument_type={types.pop()}"
+        return scoped if scoped.exists() else feed_path
 
     _pick_first_existing_column = staticmethod(first_existing_column)
 
