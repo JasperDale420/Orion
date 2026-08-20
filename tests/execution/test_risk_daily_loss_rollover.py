@@ -383,10 +383,15 @@ async def test_fill_processor_passes_broker_fill_time_to_risk_accounting(monkeyp
 
     processor = FillProcessor()
     risk_manager = MagicMock()
-    risk_manager.process_fill = AsyncMock()
+    effect = MagicMock()
+    effect.already_durable = False
+    risk_manager.prepare_fill_for_session = AsyncMock(return_value=effect)
+    risk_manager.apply_fill_effect = AsyncMock()
+    mark_processed_mock = AsyncMock()
+    persist_fill_mock = AsyncMock()
     monkeypatch.setattr("orion.execution.fill_processor.is_fill_processed", AsyncMock(return_value=False))
-    monkeypatch.setattr("orion.execution.fill_processor.mark_fill_processed", AsyncMock())
-    monkeypatch.setattr("orion.execution.fill_processor.persist_fill_record", AsyncMock())
+    monkeypatch.setattr("orion.execution.fill_processor.mark_fill_processed_in_session", mark_processed_mock)
+    monkeypatch.setattr("orion.execution.fill_processor.persist_fill_record_in_session", persist_fill_mock)
 
     fill = {
         "id": "broker-late",
@@ -400,8 +405,10 @@ async def test_fill_processor_passes_broker_fill_time_to_risk_accounting(monkeyp
     }
     await processor.process_single_fill(fill, risk_manager, AsyncMock())
 
-    kwargs = risk_manager.process_fill.await_args.kwargs
+    kwargs = risk_manager.prepare_fill_for_session.await_args.kwargs
     assert kwargs["filled_at"] == LATE_PRIOR_DAY_FILL_AT
+    mark_processed_mock.assert_awaited_once()
+    persist_fill_mock.assert_awaited_once()
 
 
 # ── Trading-date helper ─────────────────────────────────────────────────────

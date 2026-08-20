@@ -825,15 +825,15 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
     async def _is_processed(marker: str) -> bool:
         return marker in processed
 
-    async def _mark(marker: str, **kw) -> None:
+    async def _mark(_session, marker: str, **kw) -> None:
         processed.add(marker)
 
-    async def _persist(_fill) -> None:
+    async def _persist(_session, _fill) -> None:
         return None
 
     monkeypatch.setattr(fp_mod, "is_fill_processed", _is_processed)
-    monkeypatch.setattr(fp_mod, "mark_fill_processed", _mark)
-    monkeypatch.setattr(fp_mod, "persist_fill_record", _persist)
+    monkeypatch.setattr(fp_mod, "mark_fill_processed_in_session", _mark)
+    monkeypatch.setattr(fp_mod, "persist_fill_record_in_session", _persist)
     # _process_single_fill ALSO verifies via its own is_fill_processed import
     # (a separate name binding from fp_mod's) after delegating to
     # FillProcessor — patch both against the SAME shared `processed` set so
@@ -842,8 +842,11 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
 
     outcome = MagicMock()
     outcome.is_closing = False
+    effect = MagicMock()
+    effect.already_durable = False
     rm = MagicMock()
-    rm.process_fill = AsyncMock(return_value=outcome)
+    rm.prepare_fill_for_session = AsyncMock(return_value=effect)
+    rm.apply_fill_effect = AsyncMock(return_value=outcome)
     rm.update_sector_exposure = MagicMock()
 
     ee = _engine()
@@ -855,13 +858,13 @@ async def test_recovery_through_real_processor_applies_full_qty_once(monkeypatch
     client.get_order = AsyncMock(return_value=order)
 
     assert await ee._recover_missed_fill(client, "b-1", "SPCX") is True
-    rm.process_fill.assert_awaited_once()
-    # incremental_qty == full filled_qty (positional arg 1), parsed from the string field
-    assert rm.process_fill.await_args.args[1] == 3.0
+    rm.prepare_fill_for_session.assert_awaited_once()
+    # incremental_qty == full filled_qty (positional arg 2: session, ticker, qty), parsed from the string field
+    assert rm.prepare_fill_for_session.await_args.args[2] == 3.0
 
     # A second recovery (or a later poll) of the same order must NOT re-apply it.
     await ee._recover_missed_fill(client, "b-1", "SPCX")
-    rm.process_fill.assert_awaited_once()  # still once — deduped by the fill marker
+    rm.prepare_fill_for_session.assert_awaited_once()  # still once — deduped by the fill marker
 
 
 @pytest.mark.unit

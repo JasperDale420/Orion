@@ -8,13 +8,14 @@ Delegates to focused sub-modules:
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from orion.config import RiskSettings, risk_settings
 from orion.core.enums import OrderSide
+from orion.core.errors import StorageError
 from orion.execution.attribution import is_occ_option_symbol
 from orion.execution.risk.greeks import GreeksTracker
 from orion.execution.risk.sector import SectorTracker
@@ -87,6 +88,44 @@ class FillOutcome:
 
     realized_pnl: float = 0.0
     is_closing: bool = False
+
+
+@dataclass(frozen=True)
+class _FillEffect:
+    """A fill's fully-computed effect on risk state, before anything is applied.
+
+    Produced by ``RiskManager._compute_fill_effect`` (pure — reads ``self.*``
+    but never mutates it). Two things consume it: ``_write_fill_effect_to_session``
+    persists the RiskState-row fields into a caller-provided, caller-committed
+    session (no DB commit of its own), and ``_apply_fill_effect`` mutates
+    ``self.*`` to match. Splitting compute/write/apply lets a caller
+    (``FillProcessor``) commit the write in the SAME transaction as the fill
+    row and the processed-fill marker, and only mutate in-memory state (and
+    only mark this fill's dedup id) once that transaction has actually landed
+    — so a failure anywhere in the shared transaction leaves nothing applied
+    and nothing durably half-committed to roll back (2026-08-18 RCA).
+    """
+
+    fill_id: str
+    ticker: str
+    new_equity: float
+    new_daily_loss: float
+    new_peak_equity: float
+    new_position: dict[str, float]
+    new_ticker_exposure: float
+    new_open_positions: int
+    is_closing: bool
+    realized_pnl: float
+    clear_greeks: bool
+    greeks_to_apply: dict[str, float] | None
+    # True when prepare_fill_for_session found this fill's marker already
+    # durably committed (a commit-acknowledgement-loss on an earlier @db_retry
+    # attempt within the SAME call — the DB transaction actually succeeded but
+    # this process never received confirmation, so it never reached
+    # apply_fill_effect). The caller must not re-attempt the fill-row or
+    # marker writes in that case — they would collide with rows that already
+    # durably exist — but still needs the effect to catch up in-memory state.
+    already_durable: bool = False
 
 
 # Lazily resolved Prometheus metrics. The previous module-level init called
@@ -801,66 +840,119 @@ class RiskManager:
         """Public wrapper for the drawdown kill switch evaluation."""
         await self._evaluate_drawdown_kill_switch()
 
+    async def _write_risk_state_to_session(
+        self,
+        session: Any,
+        *,
+        current_daily_loss: float,
+        current_equity: float,
+        peak_equity: float,
+        open_positions: int,
+    ) -> bool:
+        """Write the ``risk_state`` row's fields into a session the CALLER owns
+        and commits — shared by ``_save_state`` (its own transaction, values
+        from ``self.*``) and the atomic fill-effect path (a transaction shared
+        with the fill row and the processed-fill marker, values from a
+        ``_FillEffect``, since ``self.*`` has not been mutated yet there).
+
+        Returns False (never raises for this) when the write is deliberately
+        discarded by the stale-baseline guard below.
+        """
+        from sqlalchemy import select
+
+        from orion.storage.models_risk import RiskState
+
+        stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
+        result = await session.execute(stmt)
+        state = result.scalars().first()
+
+        if not state:
+            state = RiskState(id="global_risk_v1")
+            session.add(state)
+
+        if self.baseline_unverified and state.accounting_version == RISK_ACCOUNTING_VERSION:
+            # Another process recorded a verified baseline while this one
+            # was still holding the legacy figures it loaded at startup.
+            # Writing them now would leave the row carrying stale
+            # 1/100th-scale money under the new version stamp, and the next
+            # restart would trust it. Discard this snapshot entirely; the
+            # operator must restart the service to pick up the baseline.
+            logger.critical(
+                "Discarding risk-state save: a verified baseline was recorded by another process while "
+                "this one held unverified legacy figures. RESTART THIS SERVICE to load the new baseline.",
+                extra={
+                    "event_type": "RISK_STATE_SAVE_DISCARDED_STALE",
+                    "in_memory_daily_loss": current_daily_loss,
+                    "in_memory_equity": current_equity,
+                    "row_version": state.accounting_version,
+                },
+            )
+            return False
+
+        state.updated_at_utc = datetime.now(UTC)
+        state.current_daily_loss = current_daily_loss
+        state.current_equity = current_equity
+        state.starting_equity = self.starting_equity
+        state.peak_equity = peak_equity
+        state.open_positions_count = open_positions
+        # Stamp provenance ONLY when these figures are genuinely on the
+        # current convention. While the gate is raised the in-memory totals
+        # still carry the legacy 1/100th-scale values loaded from this row;
+        # stamping them would forge provenance and silently lower the gate
+        # on the next restart. Leave the existing version (or NULL) alone.
+        # The trading date follows the same rule: it gives the loss figure
+        # a day identity, and legacy figures have none worth asserting.
+        if not self.baseline_unverified:
+            state.accounting_version = RISK_ACCOUNTING_VERSION
+            state.daily_loss_date = self._daily_loss_date
+        return True
+
     @db_retry
-    async def _save_state(self) -> None:
-        """Persist current risk state to DB."""
+    async def _save_state(self) -> bool:
+        """Persist current in-memory risk state to DB, in its own transaction.
 
-        async def save_risk_state(session: Any) -> None:
-            from sqlalchemy import select
-
-            from orion.storage.models_risk import RiskState
-
-            stmt = select(RiskState).where(RiskState.id == "global_risk_v1")
-            result = await session.execute(stmt)
-            state = result.scalars().first()
-
-            if not state:
-                state = RiskState(id="global_risk_v1")
-                session.add(state)
-
-            if self.baseline_unverified and state.accounting_version == RISK_ACCOUNTING_VERSION:
-                # Another process recorded a verified baseline while this one
-                # was still holding the legacy figures it loaded at startup.
-                # Writing them now would leave the row carrying stale
-                # 1/100th-scale money under the new version stamp, and the next
-                # restart would trust it. Discard this snapshot entirely; the
-                # operator must restart the service to pick up the baseline.
-                logger.critical(
-                    "Discarding risk-state save: a verified baseline was recorded by another process while "
-                    "this one held unverified legacy figures. RESTART THIS SERVICE to load the new baseline.",
-                    extra={
-                        "event_type": "RISK_STATE_SAVE_DISCARDED_STALE",
-                        "in_memory_daily_loss": self.current_daily_loss,
-                        "in_memory_equity": self.current_equity,
-                        "row_version": state.accounting_version,
-                    },
-                )
-                return
-
-            state.updated_at_utc = datetime.now(UTC)
-            state.current_daily_loss = self.current_daily_loss
-            state.current_equity = self.current_equity
-            state.starting_equity = self.starting_equity
-            state.peak_equity = self.peak_equity
-            state.open_positions_count = self.open_positions
-            # Stamp provenance ONLY when these figures are genuinely on the
-            # current convention. While the gate is raised the in-memory totals
-            # still carry the legacy 1/100th-scale values loaded from this row;
-            # stamping them would forge provenance and silently lower the gate
-            # on the next restart. Leave the existing version (or NULL) alone.
-            # The trading date follows the same rule: it gives the loss figure
-            # a day identity, and legacy figures have none worth asserting.
-            if not self.baseline_unverified:
-                state.accounting_version = RISK_ACCOUNTING_VERSION
-                state.daily_loss_date = self._daily_loss_date
-
-        await db_write(save_risk_state)
+        Returns False (without raising) when the write was deliberately
+        discarded by the stale-baseline guard in ``_write_risk_state_to_session``
+        — a caller that treats "didn't raise" as "durably saved" (``process_fill``)
+        must check this return value itself; direct callers of ``_save_state``
+        that only care whether a verified baseline survived (e.g. the
+        concurrent-writer test this guard exists for) are unaffected by that
+        stricter contract.
+        """
+        saved = await db_write(
+            lambda session: self._write_risk_state_to_session(
+                session,
+                current_daily_loss=self.current_daily_loss,
+                current_equity=self.current_equity,
+                peak_equity=self.peak_equity,
+                open_positions=self.open_positions,
+            )
+        )
+        if not saved:
+            return False
         logger.info("Risk state persisted to DB")
-        metrics = _get_metrics()
-        if metrics is not None:
-            metrics.risk_equity.set(self.current_equity)
-            metrics.risk_daily_loss.set(self.current_daily_loss)
-            metrics.risk_open_positions.set(self.open_positions)
+
+        # The commit above is what "_save_state succeeded" must mean —
+        # process_fill rolls back its in-memory mutations (and
+        # fill_processor.py deletes the just-written processed-fill marker)
+        # on ANY exception from this method, on the assumption that nothing
+        # was durably saved. A metrics-emission failure here must not make
+        # this method look like the commit itself failed — the DB already
+        # has the new state, and rolling back state that's already saved
+        # sets up a retry to double-apply on top of it.
+        try:
+            metrics = _get_metrics()
+            if metrics is not None:
+                metrics.risk_equity.set(self.current_equity)
+                metrics.risk_daily_loss.set(self.current_daily_loss)
+                metrics.risk_open_positions.set(self.open_positions)
+        except Exception as e:
+            logger.warning(
+                "Failed to update risk metrics after a successful state save",
+                extra={"event_type": "RISK_METRICS_UPDATE_FAILED", "error": str(e)},
+            )
+
+        return True
 
     async def _evaluate_drawdown_kill_switch(self) -> None:
         if self.current_equity > self.peak_equity:
@@ -877,11 +969,41 @@ class RiskManager:
             f">= limit={self.config.max_drawdown_pct:.2%}; "
             f"equity={self.current_equity:.2f} peak={self.peak_equity:.2f}"
         )
-        await CircuitBreaker().open(reason)
+        try:
+            await CircuitBreaker().open(reason)
+        except Exception as e:
+            # This runs on every fill while breached (see the docstring on
+            # the caller), so a transient failure here gets another chance
+            # on the next fill — it must not take down process_fill's own
+            # (already-decided) equity/position update with it.
+            logger.critical(
+                f"Failed to persist circuit breaker OPEN for drawdown breach ({reason}): {e}",
+                extra={"event_type": "DRAWDOWN_BREAKER_PERSIST_FAILED", "error": str(e)},
+                exc_info=True,
+            )
 
     # ── Fill processing ──────────────────────────────────────────────────
+    #
+    # A fill is processed in three separable steps, each usable on its own:
+    #   1. _compute_fill_effect — pure. Reads self.* but never mutates it or
+    #      touches the DB. Returns a _FillEffect describing what WOULD change.
+    #   2. write the effect's RiskState-row fields into a session (either
+    #      process_fill's own, via _save_fill_effect, or a session a caller
+    #      supplies and commits itself, via prepare_fill_for_session).
+    #   3. apply_fill_effect — mutates self.* to match, ONLY once the write
+    #      from step 2 has actually committed.
+    #
+    # process_fill (below) chains all three in its own transaction, exactly
+    # as before. FillProcessor uses steps 1+2 (via prepare_fill_for_session)
+    # to land the RiskState write in the SAME transaction as the fill row and
+    # the processed-fill marker — so a crash or failure anywhere in that
+    # transaction leaves NONE of the three durably committed, instead of a
+    # marker that can survive without the risk update it's supposed to attest
+    # to (2026-08-18/19 RCA — the prior compensating-delete approach could not
+    # close this: a hard crash, or the delete itself failing, both left the
+    # marker permanently suppressing the fill).
 
-    async def process_fill(
+    def _compute_fill_effect(
         self,
         ticker: str,
         qty: float,
@@ -890,10 +1012,8 @@ class RiskManager:
         fill_id: str,
         expected_price: float | None = None,
         filled_at: datetime | None = None,
-    ) -> FillOutcome:
-        """Updates authoritative risk state based on actual broker fills.
-        Calculates Realized PnL using robust signed arithmetic.
-        Idempotent: Checks fill_id against in-memory history.
+    ) -> _FillEffect:
+        """Pure computation of a fill's effect on risk state. See ``_FillEffect``.
 
         ``filled_at`` is the broker's execution time and decides how realized
         P&L reaches ``current_daily_loss`` (the kill-switch input). A loss is
@@ -902,21 +1022,7 @@ class RiskManager:
         trading date; a gain from an earlier session (a fill recovered late
         after a restart or a poll miss), or with a missing, naive or future time,
         still moves equity and positions but buys no admission headroom.
-
-        Returns a ``FillOutcome`` so the caller can persist realized PnL on a
-        closing fill. A duplicate (already-processed) fill returns a neutral
-        outcome.
         """
-        # A fill on a new trading day must accumulate into a fresh figure, not
-        # on top of yesterday's; the `_save_state` below persists the new date.
-        self._roll_daily_loss_if_new_day()
-
-        if fill_id in self.processed_fill_ids:
-            logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
-            return FillOutcome()
-
-        self.processed_fill_ids.add(fill_id)
-
         # Calculate slippage if expected price provided
         if expected_price is not None and expected_price > 0:
             slippage_bps = (price - expected_price) / expected_price * 10000
@@ -981,7 +1087,7 @@ class RiskManager:
 
             realized_pnl = pnl
 
-            self.current_equity += realized_pnl
+            new_equity = self.current_equity + realized_pnl
             # Fail-closed session attribution for the kill-switch input: a loss
             # always tightens today's budget, whatever session it came from; a
             # gain relaxes it only when the broker time proves the fill is
@@ -989,14 +1095,13 @@ class RiskManager:
             # admission headroom.
             outside_reason = self._fill_outside_session_reason(filled_at)
             applied = realized_pnl <= 0 or outside_reason is None
-            if applied:
-                self.current_daily_loss -= realized_pnl
+            new_daily_loss = self.current_daily_loss - realized_pnl if applied else self.current_daily_loss
             if outside_reason is not None:
                 logger.warning(
                     f"Fill for {ticker} is not provably in the current session ({outside_reason}, filled_at="
                     f"{filled_at.isoformat() if filled_at is not None else None}). Realized PnL=${realized_pnl:.2f} "
                     f"{'charged against' if applied else 'NOT credited to'} today's daily loss "
-                    f"(now ${self.current_daily_loss:.2f}).",
+                    f"(now ${new_daily_loss:.2f}).",
                     extra={
                         "event_type": "RISK_FILL_OUTSIDE_SESSION",
                         "ticker": ticker,
@@ -1006,57 +1111,290 @@ class RiskManager:
                         "realized_pnl": realized_pnl,
                         "applied_to_daily_loss": applied,
                         "trading_date": self._daily_loss_date.isoformat() if self._daily_loss_date else None,
-                        "daily_loss": self.current_daily_loss,
+                        "daily_loss": new_daily_loss,
                     },
                 )
 
             logger.info(
-                f"Fill Processed for {ticker}: Realized PnL=${realized_pnl:.2f}. New DailyLoss=${self.current_daily_loss:.2f}",
+                f"Fill Processed for {ticker}: Realized PnL=${realized_pnl:.2f}. New DailyLoss=${new_daily_loss:.2f}",
                 extra={
                     "event_type": "FILL_PROCESSED",
                     "ticker": ticker,
                     "pnl": realized_pnl,
-                    "daily_loss": self.current_daily_loss,
+                    "daily_loss": new_daily_loss,
                 },
             )
-            await self._evaluate_drawdown_kill_switch()
+        else:
+            new_equity = self.current_equity
+            new_daily_loss = self.current_daily_loss
 
         # Update Position State (Avg Entry Logic)
         if not is_closing:
             total_val = (old_qty * old_entry) + (signed_fill_qty * price)
             new_avg = total_val / new_qty if new_qty != 0 else 0.0
-            self.positions[ticker] = {"qty": new_qty, "avg_entry": new_avg}
+            new_position = {"qty": new_qty, "avg_entry": new_avg}
         elif abs(signed_fill_qty) > abs(old_qty):
-            self.positions[ticker] = {"qty": new_qty, "avg_entry": price}
+            new_position = {"qty": new_qty, "avg_entry": price}
+        elif math.isclose(new_qty, 0, abs_tol=1e-9):
+            new_position = {"qty": 0.0, "avg_entry": 0.0}
         else:
-            if math.isclose(new_qty, 0, abs_tol=1e-9):
-                self.positions[ticker] = {"qty": 0.0, "avg_entry": 0.0}
-            else:
-                self.positions[ticker] = {"qty": new_qty, "avg_entry": old_entry}
+            new_position = {"qty": new_qty, "avg_entry": old_entry}
 
-        self.ticker_exposures[ticker] = abs(new_qty * price * _contract_multiplier(ticker))
-        self.open_positions = sum(1 for p in self.positions.values() if not math.isclose(p["qty"], 0, abs_tol=1e-9))
+        new_ticker_exposure = abs(new_qty * price * _contract_multiplier(ticker))
+        # A new equity high must be persisted in the SAME save as the fill
+        # that created it — a profitable close followed by a restart before
+        # the next fill would otherwise leave the DB's peak_equity stale-low,
+        # understating drawdown % against the true high-water mark.
+        new_peak_equity = max(new_equity, self.peak_equity)
 
-        # Keep portfolio greeks tracking reality so the projected-greek gate on
-        # the next order is accurate. Intended greeks are stashed at submit time
+        merged_positions = dict(self.positions)
+        merged_positions[ticker] = new_position
+        new_open_positions = sum(1 for p in merged_positions.values() if not math.isclose(p["qty"], 0, abs_tol=1e-9))
+
+        # Greeks decision (applied later by _apply_fill_effect — not
+        # persisted by _save_state, so it doesn't belong in the durable
+        # write). Intended greeks are stashed at submit time
         # (set_intended_position_greeks); a flattened position clears them.
-        if math.isclose(self.positions[ticker]["qty"], 0, abs_tol=1e-9):
-            self.clear_position_greeks(ticker)
-            self._intended_position_greeks.pop(ticker, None)
+        if math.isclose(new_position["qty"], 0, abs_tol=1e-9):
+            clear_greeks = True
+            greeks_to_apply = None
         else:
-            intended = self._intended_position_greeks.get(ticker)
-            if intended is not None:
-                self.update_position_greeks(
-                    ticker, intended["delta"], intended["gamma"], intended["theta"], intended["vega"]
-                )
+            clear_greeks = False
+            greeks_to_apply = self._intended_position_greeks.get(ticker)
 
-        await self._save_state()
+        return _FillEffect(
+            fill_id=fill_id,
+            ticker=ticker,
+            new_equity=new_equity,
+            new_daily_loss=new_daily_loss,
+            new_peak_equity=new_peak_equity,
+            new_position=new_position,
+            new_ticker_exposure=new_ticker_exposure,
+            new_open_positions=new_open_positions,
+            is_closing=is_closing,
+            realized_pnl=realized_pnl,
+            clear_greeks=clear_greeks,
+            greeks_to_apply=greeks_to_apply,
+        )
 
-        metrics = _get_metrics()
-        if metrics is not None:
-            metrics.risk_exposure.labels(ticker=ticker).set(abs(new_qty * price * _contract_multiplier(ticker)))
+    async def _write_fill_effect_to_session(self, session: Any, effect: _FillEffect) -> bool:
+        """Persist a computed fill effect's RiskState-row fields into a
+        session the CALLER owns and commits. See ``_FillEffect``."""
+        return await self._write_risk_state_to_session(
+            session,
+            current_daily_loss=effect.new_daily_loss,
+            current_equity=effect.new_equity,
+            peak_equity=effect.new_peak_equity,
+            open_positions=effect.new_open_positions,
+        )
 
-        return FillOutcome(realized_pnl=realized_pnl, is_closing=is_closing)
+    def _log_and_emit_save_metrics(
+        self, *, current_equity: float, current_daily_loss: float, open_positions: int
+    ) -> None:
+        logger.info("Risk state persisted to DB")
+        try:
+            metrics = _get_metrics()
+            if metrics is not None:
+                metrics.risk_equity.set(current_equity)
+                metrics.risk_daily_loss.set(current_daily_loss)
+                metrics.risk_open_positions.set(open_positions)
+        except Exception as e:
+            logger.warning(
+                "Failed to update risk metrics after a successful state save",
+                extra={"event_type": "RISK_METRICS_UPDATE_FAILED", "error": str(e)},
+            )
+
+    @db_retry
+    async def _save_fill_effect(self, effect: _FillEffect) -> bool:
+        """``_save_state``, but for a computed ``_FillEffect`` instead of
+        ``self.*`` — process_fill's own (non-shared) transaction + retry."""
+        saved = await db_write(lambda session: self._write_fill_effect_to_session(session, effect))
+        if not saved:
+            return False
+        self._log_and_emit_save_metrics(
+            current_equity=effect.new_equity,
+            current_daily_loss=effect.new_daily_loss,
+            open_positions=effect.new_open_positions,
+        )
+        return True
+
+    def _apply_fill_effect(self, effect: _FillEffect) -> FillOutcome:
+        """Mutate ``self.*`` to match an effect that has ALREADY been durably
+        saved. Safe to call only after that write's transaction has
+        committed — this method itself never touches the DB.
+        """
+        self.current_equity = effect.new_equity
+        self.current_daily_loss = effect.new_daily_loss
+        self.peak_equity = effect.new_peak_equity
+        self.positions[effect.ticker] = effect.new_position
+        self.ticker_exposures[effect.ticker] = effect.new_ticker_exposure
+        self.open_positions = effect.new_open_positions
+
+        if effect.clear_greeks:
+            self.clear_position_greeks(effect.ticker)
+            self._intended_position_greeks.pop(effect.ticker, None)
+        elif effect.greeks_to_apply is not None:
+            g = effect.greeks_to_apply
+            self.update_position_greeks(effect.ticker, g["delta"], g["gamma"], g["theta"], g["vega"])
+
+        self.processed_fill_ids.add(effect.fill_id)
+
+        return FillOutcome(realized_pnl=effect.realized_pnl, is_closing=effect.is_closing)
+
+    async def apply_fill_effect(self, effect: _FillEffect) -> FillOutcome:
+        """Public: apply an effect whose write already committed durably (see
+        ``prepare_fill_for_session``), then evaluate the drawdown kill switch
+        and emit best-effort telemetry — the same tail ``process_fill`` runs.
+        """
+        outcome = self._apply_fill_effect(effect)
+
+        if outcome.is_closing:
+            await self._evaluate_drawdown_kill_switch()
+
+        # Best-effort telemetry after the fill is already fully applied and
+        # marked processed — must not raise into the caller (fill_processor.py
+        # would read that as "the fill failed" and delete its own just-written
+        # marker for a fill that, in fact, succeeded).
+        try:
+            metrics = _get_metrics()
+            if metrics is not None:
+                metrics.risk_exposure.labels(ticker=effect.ticker).set(effect.new_ticker_exposure)
+        except Exception as e:
+            logger.warning(
+                "Failed to update risk_exposure metric after a successful fill",
+                extra={"event_type": "RISK_METRICS_UPDATE_FAILED", "ticker": effect.ticker, "error": str(e)},
+            )
+
+        return outcome
+
+    async def prepare_fill_for_session(
+        self,
+        session: Any,
+        ticker: str,
+        qty: float,
+        price: float,
+        side: str,
+        fill_id: str,
+        expected_price: float | None = None,
+        filled_at: datetime | None = None,
+    ) -> _FillEffect | None:
+        """Compute a fill's effect and write its RiskState changes into the
+        CALLER's session — no commit. The atomic counterpart to
+        ``process_fill``, for a caller (``FillProcessor``) that needs the
+        risk-state write to land in the SAME transaction as other durable
+        writes (the fill row, the processed-fill marker).
+
+        The caller MUST commit that transaction, then call
+        ``apply_fill_effect`` with the returned effect — never before the
+        commit has actually succeeded, and never at all if it raises.
+
+        Returns None if this fill_id is already processed — same short-circuit
+        as ``process_fill``'s own dedup check, nothing to write or apply.
+
+        If the fill's marker is already durably present in the DB (checked via
+        THIS session, before writing anything), the returned effect has
+        ``already_durable=True`` and nothing was written here — the caller
+        must skip its own fill-row/marker writes too. This covers a
+        commit-acknowledgement-loss: an earlier ``@db_retry`` attempt's
+        transaction actually committed server-side, but this process never
+        received confirmation and so never reached ``apply_fill_effect`` —
+        without this check, the retry would collide with the marker's primary
+        key, exhaust its attempts, and leave the fill durably marked but
+        stuck out of sync with this process's live risk state (2026-08-19 RCA).
+        """
+        self._roll_daily_loss_if_new_day()
+
+        if fill_id in self.processed_fill_ids:
+            logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
+            return None
+
+        effect = self._compute_fill_effect(ticker, qty, price, side, fill_id, expected_price, filled_at)
+
+        from sqlalchemy import select
+
+        from orion.storage.models_risk import ProcessedFill
+
+        already_marked = (
+            await session.execute(select(ProcessedFill.fill_id).where(ProcessedFill.fill_id == fill_id))
+        ).scalar_one_or_none() is not None
+        if already_marked:
+            logger.warning(
+                f"Fill {fill_id} marker already durably present but not yet applied to live risk state "
+                "-- likely a commit-acknowledgement-loss on an earlier attempt. Recomputed effect, skipping "
+                "duplicate writes.",
+                extra={"event_type": "FILL_MARKER_ALREADY_DURABLE", "fill_id": fill_id},
+            )
+            return replace(effect, already_durable=True)
+
+        saved = await self._write_fill_effect_to_session(session, effect)
+        if not saved:
+            raise StorageError("Risk state save was discarded (stale unverified baseline superseded by a verified one)")
+        return effect
+
+    def recompute_durable_fill_effect(
+        self,
+        ticker: str,
+        qty: float,
+        price: float,
+        side: str,
+        fill_id: str,
+        expected_price: float | None = None,
+        filled_at: datetime | None = None,
+    ) -> _FillEffect:
+        """Recompute the effect for a fill whose marker the CALLER has already
+        confirmed durable by other means (a fresh, out-of-band check — see
+        ``fill_processor._write_fill_atomically``'s post-retry-exhaustion
+        recovery). No DB access here: ``self.*`` is guaranteed unchanged since
+        ``apply_fill_effect`` was never reached for this fill_id, so this is
+        the exact same effect ``prepare_fill_for_session`` would have computed.
+
+        Covers a commit-acknowledgement loss landing on the VERY LAST
+        ``@db_retry`` attempt — no further attempt exists for
+        ``prepare_fill_for_session``'s own in-session marker check to catch it
+        (2026-08-19 RCA, round 2 of this fix).
+        """
+        effect = self._compute_fill_effect(ticker, qty, price, side, fill_id, expected_price, filled_at)
+        return replace(effect, already_durable=True)
+
+    async def process_fill(
+        self,
+        ticker: str,
+        qty: float,
+        price: float,
+        side: str,
+        fill_id: str,
+        expected_price: float | None = None,
+        filled_at: datetime | None = None,
+    ) -> FillOutcome:
+        """Updates authoritative risk state based on actual broker fills.
+        Calculates Realized PnL using robust signed arithmetic.
+        Idempotent: Checks fill_id against in-memory history.
+
+        Own (non-shared) transaction: compute the effect, persist it, then
+        apply it to memory only once the persist has actually committed. See
+        ``prepare_fill_for_session`` for the atomic-multi-write variant.
+
+        Returns a ``FillOutcome`` so the caller can persist realized PnL on a
+        closing fill. A duplicate (already-processed) fill returns a neutral
+        outcome.
+        """
+        # A fill on a new trading day must accumulate into a fresh figure, not
+        # on top of yesterday's; the save below persists the new date.
+        self._roll_daily_loss_if_new_day()
+
+        if fill_id in self.processed_fill_ids:
+            logger.warning(f"Fill {fill_id} already processed by RiskManager. Skipping.")
+            return FillOutcome()
+
+        effect = self._compute_fill_effect(ticker, qty, price, side, fill_id, expected_price, filled_at)
+
+        if not await self._save_fill_effect(effect):
+            # A normal (non-raising) False here means the write was
+            # deliberately discarded (see _write_risk_state_to_session) —
+            # that does not mean "durably saved", so nothing may be applied.
+            raise StorageError("Risk state save was discarded (stale unverified baseline superseded by a verified one)")
+
+        return await self.apply_fill_effect(effect)
 
     # ── Post-trade & pending order tracking ──────────────────────────────
 

@@ -412,8 +412,12 @@ async def test_real_recovery_applies_close_fill_once(monkeypatch) -> None:
 
     processed: set[str] = set()
     monkeypatch.setattr(fp_mod, "is_fill_processed", AsyncMock(side_effect=lambda m: m in processed))
-    monkeypatch.setattr(fp_mod, "mark_fill_processed", AsyncMock(side_effect=lambda m, **k: processed.add(m)))
-    monkeypatch.setattr(fp_mod, "persist_fill_record", AsyncMock())
+    monkeypatch.setattr(
+        fp_mod,
+        "mark_fill_processed_in_session",
+        AsyncMock(side_effect=lambda session, m, **k: processed.add(m)),
+    )
+    monkeypatch.setattr(fp_mod, "persist_fill_record_in_session", AsyncMock())
     # _process_single_fill ALSO verifies via its own is_fill_processed import
     # (a separate name binding from fp_mod's) after delegating to
     # FillProcessor — patch both against the SAME shared `processed` set so
@@ -434,8 +438,11 @@ async def test_real_recovery_applies_close_fill_once(monkeypatch) -> None:
     outcome = MagicMock()
     outcome.is_closing = True
     outcome.realized_pnl = 12.0
+    effect = MagicMock()
+    effect.already_durable = False
     rm = MagicMock()
-    rm.process_fill = AsyncMock(return_value=outcome)
+    rm.prepare_fill_for_session = AsyncMock(return_value=effect)
+    rm.apply_fill_effect = AsyncMock(return_value=outcome)
     rm.update_sector_exposure = MagicMock()
 
     ee = ExecutionEngine.__new__(ExecutionEngine)
@@ -461,9 +468,10 @@ async def test_real_recovery_applies_close_fill_once(monkeypatch) -> None:
     client.get_order = AsyncMock(return_value=close_order)
 
     assert await ee._recover_missed_close_fills(client) == 1
-    rm.process_fill.assert_awaited_once()
-    assert rm.process_fill.await_args.args[1] == 3.0  # full close qty applied once
+    rm.prepare_fill_for_session.assert_awaited_once()
+    assert rm.prepare_fill_for_session.await_args.args[2] == 3.0  # full close qty applied once
+    rm.apply_fill_effect.assert_awaited_once_with(effect)
 
     # A second cycle of the same order must not re-apply it (marker dedupe).
     assert await ee._recover_missed_close_fills(client) == 0
-    rm.process_fill.assert_awaited_once()
+    rm.prepare_fill_for_session.assert_awaited_once()
