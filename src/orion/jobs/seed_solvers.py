@@ -428,9 +428,5 @@ async def ensure_active_solvers_ready(stage: str | None) -> SolverInventoryStatu
     )
 
 
-async def seed_default_solver() -> None:
-    await seed_default_solvers()
-
-
 if __name__ == "__main__":
     asyncio.run(seed_default_solvers())
