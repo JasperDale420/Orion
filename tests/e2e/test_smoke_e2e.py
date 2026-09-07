@@ -692,6 +692,15 @@ async def run_smoke_test() -> dict[str, bool]:
         print("[Stage 9] Execution Engine (mock broker)...", end=" ")
         try:
             if decision and decision.decision == "EXECUTE":
+                # RegimeGate derives regime_size_multiplier from the candidate's
+                # timestamp via the real wall clock (session = premarket/opening/
+                # midday/power_hour/close), so leaving it as-is makes sizing --
+                # and this stage's pass/fail -- depend on what time CI happens to
+                # run. Pin it so the execution stage is deterministic regardless
+                # of time of day.
+                execution_params = decision.execution_params or {}
+                execution_params["regime_size_multiplier"] = 1.0
+                decision.execution_params = execution_params
                 await _execute_mock_smoke_order(run_tag=run_tag, decision=decision, candidate=candidates[0])
                 results["9_execution"] = True
                 print(f"PASS (order submitted, status={decision.executed_successfully})")
