@@ -26,7 +26,7 @@ dependencies = [
     "websockets>=17.1",
     "pyarrow>=25.0.1",
     "fastapi>=0.141.1",
-    "uvicorn>=0.51.0",
+    "uvicorn>=0.52.4",
     "exchange-calendars>=4.13.2",
     "scipy>=1.18.1",
     "numpy<3",
