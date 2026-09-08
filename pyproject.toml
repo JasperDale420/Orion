@@ -31,7 +31,7 @@ dependencies = [
     "scipy>=1.18.1",
     "numpy<3",
     "pyyaml>=6.0.3",
-    "joblib>=1.5.3",
+    "joblib>=1.6.0",
     "alpaca-py>=0.43.5",
     # alpaca-py imports pytz at module load (alpaca.data.requests) but does not
     # declare it — keep this pin even though orion's own code uses zoneinfo.
