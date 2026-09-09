@@ -13,17 +13,6 @@ from datetime import UTC, datetime
 logger = logging.getLogger(__name__)
 
 
-class MarketRegime(str, enum.Enum):
-    """Legacy single-axis regime. Deprecated — use MarketRegimeSnapshot instead."""
-
-    LOW_VOL = "LOW_VOL"
-    HIGH_VOL = "HIGH_VOL"
-    TRENDING_UP = "TRENDING_UP"
-    TRENDING_DOWN = "TRENDING_DOWN"
-    NEUTRAL = "NEUTRAL"
-    UNKNOWN = "UNKNOWN"
-
-
 # Multi-axis regime enums
 class TrendRegime(str, enum.Enum):
     UP = "up"
