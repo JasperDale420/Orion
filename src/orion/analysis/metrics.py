@@ -118,14 +118,6 @@ def compute_deflated_sharpe_ratio(
     return float(dsr_prob)
 
 
-def compute_smart_sharpe(returns: npt.NDArray[Any], periods_per_year: int = 252) -> float:
-    """
-    Computes Sharpe penalized for autocorrelation.
-    Auto-correlation inflates Sharpe.
-    """
-    # ... Implementation optional for V1, stick to Deflated above ...
-
-
 def compute_bootstrap_p_value(returns: npt.NDArray[Any], n_samples: int = 1000) -> float:
     """
     Computes a simple bootstrap p-value for the hypothesis that the mean return > 0.
