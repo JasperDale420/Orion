@@ -13,6 +13,7 @@ from empire_core.http_client import create_http_client
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.base_gateway import BaseGatewayConnector
+from orion.shared.dataframe_utils import coerce_ticker_column as _coerce_ticker_column
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 
@@ -148,13 +149,3 @@ class UWMaxPainConnector(BaseGatewayConnector):
         """Persist latest max pain rows in memory."""
         self._latest_max_pain_rows.append(dict(record))
         self._latest_max_pain_rows = self._trim_buffer(self._latest_max_pain_rows)
-
-
-def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
-    if "ticker" in df.columns:
-        return df
-    if "symbol" in df.columns:
-        return df.assign(ticker=df["symbol"].astype(str).str.upper())
-    if "instrument_key" in df.columns:
-        return df.assign(ticker=df["instrument_key"].astype(str).str.split(":").str[-1].str.upper())
-    return df
