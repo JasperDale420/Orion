@@ -26,6 +26,7 @@ from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
 from orion.core.market_schedule import MarketSchedule
 from orion.shared.logger import setup_logging
+from orion.shared.dataframe_utils import coerce_ticker_column as _coerce_ticker_column
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.storage.db import init_db
 
@@ -479,16 +480,6 @@ async def run_quality_checks():
 
 def _prefer_heber_source() -> bool:
     return system_settings.data_quality_checker_prefer_heber
-
-
-def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
-    if "ticker" in df.columns:
-        return df
-    if "symbol" in df.columns:
-        return df.assign(ticker=df["symbol"].astype(str).str.upper())
-    if "instrument_key" in df.columns:
-        return df.assign(ticker=df["instrument_key"].astype(str).str.split(":").str[-1].str.upper())
-    return df
 
 
 def _latest_event_time(df: pd.DataFrame) -> datetime | None:
