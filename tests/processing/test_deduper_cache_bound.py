@@ -102,3 +102,19 @@ async def test_dedupe_batch_drops_evicted_db_duplicate(monkeypatch):
         returned_ids = {e.event_id for e in result}
         assert "persisted" not in returned_ids  # DB-deduped despite cache miss
         assert "fresh" in returned_ids
+
+
+@pytest.mark.asyncio
+async def test_dedupe_batch_collapses_duplicate_ids_within_same_batch():
+    """A single incoming batch can itself contain repeated event_ids (e.g. a
+    provider redelivery within one poll window). dedupe_batch must collapse
+    these to one row per event_id rather than returning duplicates — the
+    unique_candidates dict keys on event_id, so this guards that behavior
+    against a future refactor to a plain list."""
+    async with async_session_factory() as session:
+        engine = DeduplicationEngine(session)
+
+        result = await engine.dedupe_batch([_event("dup"), _event("dup"), _event("dup"), _event("unique")])
+
+        returned_ids = [e.event_id for e in result]
+        assert sorted(returned_ids) == ["dup", "unique"]
