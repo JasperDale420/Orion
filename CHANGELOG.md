@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Dead `fetch_table_columns` helper removed from `labeler/schema_guard.py`.** It was added alongside `resolve_insert_columns` to back schema-validated inserts in the price-target labeler, but that labeler was archived on 2026-06-10 (`archive/2026-06-10_price-target-labeler/`) and no other caller ever adopted it — confirmed unused by a whole-repo grep (only a descriptive mention remained in an old audit doc). `resolve_insert_columns` and `SchemaValidationError`, which are still tested and reachable, are unchanged.
+
 ### Fixed
 
 - **The e2e smoke test's execution stage no longer fails when CI happens to run outside regular trading hours.** Its mock order went through `ExecutionEngine`'s real sizing math, which scales the fixed per-trade budget by RegimeGate's combined multiplier (premarket/close sessions apply a 0.5x session multiplier that combines with the other regime axes to as low as ~0.42x). At that reduced budget the test's option price rounded down to 0 contracts, which short-circuits before the mock broker is ever called — failing the stage's `persist_pending_order` assertion. The regime sizing multiplier is now pinned to a fixed value before the execution stage runs, so the stage's pass/fail no longer depends on what time of day the test happens to run (verified against a real TimescaleDB with both a mocked premarket and a regular session).
