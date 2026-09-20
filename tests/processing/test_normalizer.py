@@ -219,3 +219,73 @@ def test_normalize_uw_alert_accepts_alert_ts_utc():
     assert normalized["ticker"] == "AAPL"
     # alert normalizer uses alert_ts_utc as the timestamp key in output
     assert "alert_ts_utc" in normalized or "ts_utc" in normalized
+
+
+def test_normalize_uw_alert_extracts_underlying_and_strike_from_occ_symbol():
+    """UW alerts sometimes carry a full OCC option symbol (e.g.
+    "SLV251231P00064000") as the ticker instead of the bare underlying.
+    _normalize_uw_alert must parse it via parse_occ_symbol and use the
+    parsed underlying/strike/put_call/expiry — otherwise the candidate is
+    tagged with a nonsense "ticker" (the OCC string itself) instead of the
+    real underlying symbol.
+    """
+    payload = {
+        "ticker": "SLV251231P00064000",
+        "timestamp": "2025-12-01T15:00:00Z",
+    }
+
+    normalized = NormalizationEngine.normalize_event("UW", "UW_ALERT", payload)
+
+    assert normalized["ticker"] == "SLV"
+    assert normalized["option_symbol"] == "SLV251231P00064000"
+    assert normalized["put_call"] == "P"
+    assert normalized["strike"] == 64.0
+    assert normalized["expiry"] == "2025-12-31"
+
+
+def test_normalize_uw_flow_coerces_numeric_boolish_flags():
+    """_coerce_boolish must treat numeric 0/1 (not just string forms like
+    "yes"/"true") as False/True — some UW payload variants send sweep/floor/
+    multileg flags as ints rather than strings."""
+    payload = {
+        "ticker": "AAPL",
+        "timestamp": "2023-10-27T10:00:00Z",
+        "put_call": "C",
+        "strike_price": "180.0",
+        "price": "1.50",
+        "size": "100",
+        "has_sweep": 1,
+        "has_floor": 0,
+        "has_multileg": 0.0,
+    }
+
+    normalized = NormalizationEngine.normalize_event("UW", "UW_FLOW", payload)
+
+    assert normalized["flags"]["is_sweep"] is True
+    assert normalized["flags"]["is_block"] is False
+    assert normalized["flags"]["is_multi_leg"] is False
+
+
+def test_generate_event_id_is_deterministic_and_sensitive_to_inputs():
+    """generate_event_id (PRD 6.1 backup id when a provider omits one) must
+    be a stable hash of its inputs: identical inputs always produce the same
+    id (required for idempotent dedup), and changing any single input field
+    must change the id (otherwise distinct events would collide and one
+    would be silently dropped as a duplicate)."""
+    base_args = ("UW", "UW_FLOW", "AAPL", "2026-01-01T00:00:00Z", {"strike": 180.0})
+
+    id_a = NormalizationEngine.generate_event_id(*base_args)
+    id_b = NormalizationEngine.generate_event_id(*base_args)
+    assert id_a == id_b
+
+    id_diff_ticker = NormalizationEngine.generate_event_id(
+        "UW", "UW_FLOW", "MSFT", "2026-01-01T00:00:00Z", {"strike": 180.0}
+    )
+    id_diff_ts = NormalizationEngine.generate_event_id(
+        "UW", "UW_FLOW", "AAPL", "2026-01-01T00:00:01Z", {"strike": 180.0}
+    )
+    id_diff_payload = NormalizationEngine.generate_event_id(
+        "UW", "UW_FLOW", "AAPL", "2026-01-01T00:00:00Z", {"strike": 181.0}
+    )
+
+    assert len({id_a, id_diff_ticker, id_diff_ts, id_diff_payload}) == 4
