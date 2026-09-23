@@ -4,7 +4,6 @@ UW Greek Exposure Connector.
 Fetches GEX (Gamma), VEX (Vanna), CEX (Charm) exposure data via Data Gateway.
 """
 
-import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -37,88 +36,57 @@ class UWGreekExposureConnector(BaseGatewayConnector):
     async def fetch_and_store(self, tickers: list[str]) -> int:
         """Fetch greek exposure for multiple tickers and store (bounded concurrency)."""
         now = datetime.now(UTC)
-        semaphore = asyncio.Semaphore(3)
-        results: list[int] = []
 
-        async def _fetch_one(ticker: str) -> int:
-            async with semaphore:
-                try:
-                    data = await asyncio.to_thread(self._fetch_greek_exposure, ticker)
-                except Exception as e:
-                    logger.warning("greek_exposure_retry_exhausted", ticker=ticker, error=str(e))
-                    return 0
-                finally:
-                    await asyncio.sleep(0.5)  # Rate limit between requests
-
-                if not data or "data" not in data:
-                    return 0
-
-                exposure_data = data["data"]
-                if not exposure_data:
-                    return 0
-
-                # API returns: call_gamma, put_gamma, call_vanna, put_vanna, call_charm, put_charm
-                # GEX = call_gamma + put_gamma (net gamma exposure)
-                # VEX = call_vanna + put_vanna (net vanna exposure)
-                # CEX = call_charm + put_charm (net charm exposure)
-                if isinstance(exposure_data, list):
-                    # /gex returns one aggregate row per day; upstream order is
-                    # NOT guaranteed, so pick the most recent by timestamp (do
-                    # not use [-1]). Summing across the series would be wrong.
-                    latest = max(exposure_data, key=lambda e: str(e.get("timestamp") or ""))
-                    total_gex_oi = float(latest.get("call_gamma") or 0) + float(latest.get("put_gamma") or 0)
-                    total_gex_vol = 0
-                    total_vex_oi = float(latest.get("call_vanna") or 0) + float(latest.get("put_vanna") or 0)
-                    total_vex_vol = 0
-                    total_cex_oi = float(latest.get("call_charm") or 0) + float(latest.get("put_charm") or 0)
-                    total_cex_vol = 0
-                    call_delta = float(latest.get("call_delta") or 0)
-                    put_delta = float(latest.get("put_delta") or 0)
-                    spot = 0
-                else:
-                    total_gex_oi = float(exposure_data.get("call_gamma") or 0) + float(
-                        exposure_data.get("put_gamma") or 0
-                    )
-                    total_gex_vol = 0
-                    total_vex_oi = float(exposure_data.get("call_vanna") or 0) + float(
-                        exposure_data.get("put_vanna") or 0
-                    )
-                    total_vex_vol = 0
-                    total_cex_oi = float(exposure_data.get("call_charm") or 0) + float(
-                        exposure_data.get("put_charm") or 0
-                    )
-                    total_cex_vol = 0
-                    call_delta = float(exposure_data.get("call_delta") or 0)
-                    put_delta = float(exposure_data.get("put_delta") or 0)
-                    spot = 0
-
-                record = {
-                    "ticker": ticker,
-                    "ts_utc": now,
-                    "gex_oi": total_gex_oi,
-                    "gex_volume": total_gex_vol,
-                    "vex_oi": total_vex_oi,
-                    "vex_volume": total_vex_vol,
-                    "cex_oi": total_cex_oi,
-                    "cex_volume": total_cex_vol,
-                    "call_delta": call_delta,
-                    "put_delta": put_delta,
-                    "call_fill_delta": 0,
-                    "put_fill_delta": 0,
-                    "spot_price": spot,
-                }
-
-                await self._persist_exposure(record)
-                return 1
-
-        results = await asyncio.gather(*[_fetch_one(t) for t in tickers], return_exceptions=True)
-        stored = 0
-        for i, r in enumerate(results):
-            if isinstance(r, Exception):
-                logger.error("greek_exposure_ticker_failed", ticker=tickers[i], error=str(r))
+        async def _process(ticker: str, exposure_data: Any) -> int:
+            # API returns: call_gamma, put_gamma, call_vanna, put_vanna, call_charm, put_charm
+            # GEX = call_gamma + put_gamma (net gamma exposure)
+            # VEX = call_vanna + put_vanna (net vanna exposure)
+            # CEX = call_charm + put_charm (net charm exposure)
+            if isinstance(exposure_data, list):
+                # /gex returns one aggregate row per day; upstream order is
+                # NOT guaranteed, so pick the most recent by timestamp (do
+                # not use [-1]). Summing across the series would be wrong.
+                latest = max(exposure_data, key=lambda e: str(e.get("timestamp") or ""))
+                total_gex_oi = float(latest.get("call_gamma") or 0) + float(latest.get("put_gamma") or 0)
+                total_gex_vol = 0
+                total_vex_oi = float(latest.get("call_vanna") or 0) + float(latest.get("put_vanna") or 0)
+                total_vex_vol = 0
+                total_cex_oi = float(latest.get("call_charm") or 0) + float(latest.get("put_charm") or 0)
+                total_cex_vol = 0
+                call_delta = float(latest.get("call_delta") or 0)
+                put_delta = float(latest.get("put_delta") or 0)
+                spot = 0
             else:
-                stored += r
-        return stored
+                total_gex_oi = float(exposure_data.get("call_gamma") or 0) + float(exposure_data.get("put_gamma") or 0)
+                total_gex_vol = 0
+                total_vex_oi = float(exposure_data.get("call_vanna") or 0) + float(exposure_data.get("put_vanna") or 0)
+                total_vex_vol = 0
+                total_cex_oi = float(exposure_data.get("call_charm") or 0) + float(exposure_data.get("put_charm") or 0)
+                total_cex_vol = 0
+                call_delta = float(exposure_data.get("call_delta") or 0)
+                put_delta = float(exposure_data.get("put_delta") or 0)
+                spot = 0
+
+            record = {
+                "ticker": ticker,
+                "ts_utc": now,
+                "gex_oi": total_gex_oi,
+                "gex_volume": total_gex_vol,
+                "vex_oi": total_vex_oi,
+                "vex_volume": total_vex_vol,
+                "cex_oi": total_cex_oi,
+                "cex_volume": total_cex_vol,
+                "call_delta": call_delta,
+                "put_delta": put_delta,
+                "call_fill_delta": 0,
+                "put_fill_delta": 0,
+                "spot_price": spot,
+            }
+
+            await self._persist_exposure(record)
+            return 1
+
+        return await self._fetch_many_bounded(tickers, self._fetch_greek_exposure, _process, label="greek_exposure")
 
     async def _persist_exposure(self, record: dict[str, Any]) -> None:
         """Persist latest greek exposure samples in memory."""

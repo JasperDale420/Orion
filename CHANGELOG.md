@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Unified the per-ticker fetch/retry/rate-limit boilerplate shared by the greek exposure, IV rank, and max pain UW connectors.** `fetch_and_store` in each had drifted into three near-identical copies of the same bounded-concurrency loop (`asyncio.Semaphore(3)`, a 0.5s rate-limit sleep, per-ticker exception isolation via `asyncio.gather(..., return_exceptions=True)`, and unwrapping the gateway's `{"data": ...}` envelope) wrapped around each connector's own parsing logic. That orchestration now lives once, as `BaseGatewayConnector._fetch_many_bounded`, and all three connectors call it with their existing per-ticker fetch/parse functions. Market tide (single-date, not per-ticker) and the VIX proxy connector (reads Heber bars, not the gateway) don't share this shape and are unchanged. No behavior change: concurrency, rate limiting, retry/error handling, and the data returned are identical.
+
 ### Removed
 
 - **Dead `fetch_table_columns` helper removed from `labeler/schema_guard.py`.** It was added alongside `resolve_insert_columns` to back schema-validated inserts in the price-target labeler, but that labeler was archived on 2026-06-10 (`archive/2026-06-10_price-target-labeler/`) and no other caller ever adopted it — confirmed unused by a whole-repo grep (only a descriptive mention remained in an old audit doc). `resolve_insert_columns` and `SchemaValidationError`, which are still tested and reachable, are unchanged.
