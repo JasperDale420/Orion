@@ -94,6 +94,7 @@ class BaseGatewayConnector:
         process_one: Callable[[str, Any], Awaitable[int]],
         *,
         label: str,
+        log: Any = None,
         concurrency: int = 3,
         rate_limit_delay: float = 0.5,
     ) -> int:
@@ -106,9 +107,14 @@ class BaseGatewayConnector:
         payload to *process_one* (which does the connector-specific parsing
         and persistence and returns the number of records stored).
 
+        *log* is the calling connector's logger, so retry/failure events keep
+        being emitted under that connector's logger name; it defaults to this
+        module's logger.
+
         *fetch_one* is a synchronous call (run in a thread) that returns the
         raw gateway payload for one ticker, or ``None``.
         """
+        log = log or logger
         semaphore = asyncio.Semaphore(concurrency)
 
         async def _fetch_one(ticker: str) -> int:
@@ -116,7 +122,7 @@ class BaseGatewayConnector:
                 try:
                     data = await asyncio.to_thread(fetch_one, ticker)
                 except Exception as e:
-                    logger.warning(f"{label}_retry_exhausted", ticker=ticker, error=str(e))
+                    log.warning(f"{label}_retry_exhausted", ticker=ticker, error=str(e))
                     return 0
                 finally:
                     await asyncio.sleep(rate_limit_delay)  # Rate limit between requests
@@ -134,7 +140,7 @@ class BaseGatewayConnector:
         stored = 0
         for i, r in enumerate(results):
             if isinstance(r, Exception):
-                logger.error(f"{label}_ticker_failed", ticker=tickers[i], error=str(r))
+                log.error(f"{label}_ticker_failed", ticker=tickers[i], error=str(r))
             else:
                 stored += r
         return stored

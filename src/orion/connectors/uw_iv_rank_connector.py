@@ -54,7 +54,7 @@ class UWIVRankConnector(BaseGatewayConnector):
             await self._persist_iv_rank(record)
             return 1
 
-        return await self._fetch_many_bounded(tickers, self._fetch_iv_rank, _process, label="iv_rank")
+        return await self._fetch_many_bounded(tickers, self._fetch_iv_rank, _process, label="iv_rank", log=logger)
 
     async def _persist_iv_rank(self, record: dict[str, Any]) -> None:
         """Persist latest IV rank rows in memory."""

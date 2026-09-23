@@ -86,7 +86,9 @@ class UWGreekExposureConnector(BaseGatewayConnector):
             await self._persist_exposure(record)
             return 1
 
-        return await self._fetch_many_bounded(tickers, self._fetch_greek_exposure, _process, label="greek_exposure")
+        return await self._fetch_many_bounded(
+            tickers, self._fetch_greek_exposure, _process, label="greek_exposure", log=logger
+        )
 
     async def _persist_exposure(self, record: dict[str, Any]) -> None:
         """Persist latest greek exposure samples in memory."""

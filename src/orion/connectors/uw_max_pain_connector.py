@@ -80,7 +80,7 @@ class UWMaxPainConnector(BaseGatewayConnector):
 
             return count
 
-        return await self._fetch_many_bounded(tickers, self._fetch_max_pain, _process, label="max_pain")
+        return await self._fetch_many_bounded(tickers, self._fetch_max_pain, _process, label="max_pain", log=logger)
 
     async def _get_current_price(self, ticker: str) -> float | None:
         """Get latest price from Heber bars."""
