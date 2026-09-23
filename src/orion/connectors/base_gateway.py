@@ -6,6 +6,8 @@ retryable status code handling, HTTP GET with retry, and in-memory buffer trimmi
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -84,3 +86,61 @@ class BaseGatewayConnector:
         if len(buffer) > max_size:
             return buffer[-trim_to:]
         return buffer
+
+    async def _fetch_many_bounded(
+        self,
+        tickers: list[str],
+        fetch_one: Callable[[str], dict[str, Any] | None],
+        process_one: Callable[[str, Any], Awaitable[int]],
+        *,
+        label: str,
+        log: Any = None,
+        concurrency: int = 3,
+        rate_limit_delay: float = 0.5,
+    ) -> int:
+        """Fetch+process a batch of tickers with bounded concurrency.
+
+        Shared per-ticker orchestration for connectors that fan out over a
+        ticker list: bounds concurrency with a semaphore, rate-limits between
+        requests, isolates one ticker's failure from the rest, and unwraps
+        the standard gateway ``{"data": ...}`` envelope before handing the
+        payload to *process_one* (which does the connector-specific parsing
+        and persistence and returns the number of records stored).
+
+        *log* is the calling connector's logger, so retry/failure events keep
+        being emitted under that connector's logger name; it defaults to this
+        module's logger.
+
+        *fetch_one* is a synchronous call (run in a thread) that returns the
+        raw gateway payload for one ticker, or ``None``.
+        """
+        log = log or logger
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _fetch_one(ticker: str) -> int:
+            async with semaphore:
+                try:
+                    data = await asyncio.to_thread(fetch_one, ticker)
+                except Exception as e:
+                    log.warning(f"{label}_retry_exhausted", ticker=ticker, error=str(e))
+                    return 0
+                finally:
+                    await asyncio.sleep(rate_limit_delay)  # Rate limit between requests
+
+                if not data or "data" not in data:
+                    return 0
+
+                payload = data["data"]
+                if not payload:
+                    return 0
+
+                return await process_one(ticker, payload)
+
+        results = await asyncio.gather(*[_fetch_one(t) for t in tickers], return_exceptions=True)
+        stored = 0
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                log.error(f"{label}_ticker_failed", ticker=tickers[i], error=str(r))
+            else:
+                stored += r
+        return stored
