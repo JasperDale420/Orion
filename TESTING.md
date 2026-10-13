@@ -6,15 +6,15 @@ This repository uses `pytest` for testing, with a focus on **Vertical Slice** ar
 
 ```bash
 # Install dependencies
-poetry install
+uv sync
 
 # Run the full suite
-poetry run make test
+uv run make test
 
 # Run specific layers
-poetry run make test-unit         # Fast, isolated component tests
-poetry run make test-integration  # SLOW. Tests DB, Queue, and Contracts.
-poetry run make test-eod          # End-to-End user journeys.
+uv run make test-unit         # Fast, isolated component tests
+uv run make test-integration  # SLOW. Tests DB, Queue, and Contracts.
+uv run make test-eod          # End-to-End user journeys.
 ```
 
 ## 🏗️ Test Architecture

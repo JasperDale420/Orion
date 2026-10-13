@@ -165,4 +165,4 @@ Match local commands to CI before pushing: `uv run pytest && ruff check . && myp
 
 - [`code-standards.md`](code-standards.md)
 - [`configuration-guide.md`](configuration-guide.md) — env vars that change test behaviour
-- Older guide preserved: `../TESTING.md` (Poetry-era, kept for legacy commands)
+- Older guide preserved: `../TESTING.md` (older guide, kept for legacy commands)
