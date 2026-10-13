@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Removed
 
+- **Stale Poetry lockfile `poetry.lock` removed.** Orion has installed exclusively from `uv.lock` (local `uv sync`, CI and the Docker image) since the move to a PEP 621 `[project]` layout; nothing reads `poetry.lock` and it had not been updated since March 2026. It still pinned old, vulnerable versions of packages Orion no longer depends on at all (for example `litellm` and `aiohttp`), which kept roughly 78 Dependabot security alerts open against a file that is never installed.
 - **Dead `fetch_table_columns` helper removed from `labeler/schema_guard.py`.** It was added alongside `resolve_insert_columns` to back schema-validated inserts in the price-target labeler, but that labeler was archived on 2026-06-10 (`archive/2026-06-10_price-target-labeler/`) and no other caller ever adopted it — confirmed unused by a whole-repo grep (only a descriptive mention remained in an old audit doc). `resolve_insert_columns` and `SchemaValidationError`, which are still tested and reachable, are unchanged.
 
 ### Fixed
