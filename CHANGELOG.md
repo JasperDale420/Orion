@@ -6,12 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Security: cleared the open Dependabot alerts on `uv.lock`, and brought the lockfile back in line with `pyproject.toml`.** The flagged packages were bumped to their smallest patched release: `anyio` 4.13.0 to 4.14.2 (CRITICAL CVE-2026-63374 TLS host-name spoofing, plus CVE-2026-64847), `starlette` 1.0.0 to 1.3.1 (two HIGH plus three lower), `urllib3` 2.6.3 to 2.8.0 (four HIGH), `virtualenv` 21.2.0 to 21.7.13 (three HIGH, dev only), `Mako` 1.3.10 to 1.4.2 (two HIGH), `msgpack` 1.1.2 to 1.2.1 (HIGH) and `httpx2` 2.10.0 to 2.12.0 (HIGH CVE-2026-84382). The lockfile had also drifted behind recent dependency-floor bumps in `pyproject.toml` (for example it still held `openai` 3.1.0 against a `>=3.24.0` requirement, and did not carry the `sqlalchemy<2.1` cap), so the Docker image's `uv sync --frozen` was installing versions the project no longer declares. Relocking moves those packages to exactly the minimum versions `pyproject.toml` already requires (`openai` 3.24.0, `fastapi` 0.142.2, `pydantic` 2.13.5, `sqlalchemy` 2.0.54, `alembic` 1.20.0, `uvicorn` 0.54.0, `websockets` 17.2 and a few others), plus the transitive versions those floors demand; SQLAlchemy stays on 2.0.x. No code or `pyproject.toml` changes.
+
 ### Changed
 
 - **Unified the per-ticker fetch/retry/rate-limit boilerplate shared by the greek exposure, IV rank, and max pain UW connectors.** `fetch_and_store` in each had drifted into three near-identical copies of the same bounded-concurrency loop (`asyncio.Semaphore(3)`, a 0.5s rate-limit sleep, per-ticker exception isolation via `asyncio.gather(..., return_exceptions=True)`, and unwrapping the gateway's `{"data": ...}` envelope) wrapped around each connector's own parsing logic. That orchestration now lives once, as `BaseGatewayConnector._fetch_many_bounded`, and all three connectors call it with their existing per-ticker fetch/parse functions. Market tide (single-date, not per-ticker) and the VIX proxy connector (reads Heber bars, not the gateway) don't share this shape and are unchanged. No behavior change: concurrency, rate limiting, retry/error handling, and the data returned are identical, and retry/failure log events are still emitted under each connector's own logger name.
 
 ### Removed
 
+- **Stale Poetry lockfile `poetry.lock` removed.** Orion installs only from `uv.lock` (local `uv sync`, CI and the Docker image) since the move to a PEP 621 `[project]` layout; nothing reads `poetry.lock` and it had not been updated since March 2026. It still pinned old, vulnerable versions of packages Orion no longer depends on at all (for example `litellm` and `aiohttp`), which kept roughly 78 Dependabot security alerts open against a file that is never installed. The remaining Poetry commands in `TESTING.md` and `CONTRIBUTING.md` now use `uv` instead.
 - **Dead `fetch_table_columns` helper removed from `labeler/schema_guard.py`.** It was added alongside `resolve_insert_columns` to back schema-validated inserts in the price-target labeler, but that labeler was archived on 2026-06-10 (`archive/2026-06-10_price-target-labeler/`) and no other caller ever adopted it — confirmed unused by a whole-repo grep (only a descriptive mention remained in an old audit doc). `resolve_insert_columns` and `SchemaValidationError`, which are still tested and reachable, are unchanged.
 
 ### Fixed
