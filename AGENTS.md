@@ -112,7 +112,6 @@ services.
 | `option_quote_tracker` | `orion.main_option_quote_tracker` | legacy-labels |
 | `meta-search` | `orion.main_meta` | tools |
 | `meta-weekly` | `orion.main_meta_weekly` | scheduled |
-| `dashboard-reset` | `orion.jobs.daily_dashboard_reset` | scheduled |
 
 ## TimescaleDB
 
