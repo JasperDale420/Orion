@@ -707,9 +707,50 @@ class ExecutionEngine:
         a timely one, but a blind submit is worse than both.
 
         CLOSES ONLY. No entry path calls this, and it must never become an entry
-        gate — a dead calendar must never admit new risk, only shed it.
+        gate — a dead calendar must never admit new risk, only shed it. Entries
+        are gated by `_entry_session_state`, which has no fallback.
         """
         return await self._options_window_state(require_fresh=require_fresh) == "open"
+
+    async def _entry_session_state(self) -> str:
+        """``"open"``, ``"closed"`` or ``"unknown"`` for a NEW options entry. Never raises.
+
+        ``"open"`` only when BOTH authorities confirm the regular options session:
+
+        - the exchange calendar. A calendar that cannot answer is ``"unknown"``
+          with no fallback: the broker-clock fallback above exists so closes can
+          shed risk while the calendar is down, and must never admit new risk;
+        - a fresh broker clock read — the authority that accepts, rejects or
+          QUEUES the order (a day order placed after the close rests until the
+          next session instead of being rejected), and the only one that knows
+          about an unscheduled closure. An error, timeout, non-2xx (429) or
+          malformed answer is ``"unknown"`` (see `_classify_broker_clock`).
+
+        Independent of the close gate's cached verdicts: it neither reads nor
+        writes them, so an entry's clock read can never delay or authorize an
+        exit. The clock is read only once the calendar says open.
+        """
+        try:
+            if getattr(self, "_market_schedule", None) is None:
+                from orion.core.market_schedule import MarketSchedule
+
+                self._market_schedule = MarketSchedule()
+            calendar_open = self._market_schedule.is_market_open_for_options()
+        except Exception as exc:
+            logger.critical(
+                f"Exchange calendar unavailable ({exc}) — new option entries are BLOCKED "
+                "until the process is restarted with a working calendar.",
+                extra={"event_type": "ENTRY_BLOCKED_CALENDAR_UNAVAILABLE", "error": str(exc)},
+            )
+            return "unknown"
+        if not calendar_open:
+            return "closed"
+
+        try:
+            clock = await self._get_gateway_client().get_clock()
+        except Exception as exc:
+            clock = {"error": str(exc)}
+        return _classify_broker_clock(clock)
 
     async def options_session_confirmed_closed(self) -> bool:
         """True only when the options session is CONFIRMED shut. Never raises.
@@ -1921,6 +1962,35 @@ class ExecutionEngine:
             )
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = "Rate limit exceeded"
+            return
+
+        # Session fence. Placed after the rate-limiter wait (up to 10s, which
+        # can itself cross the close) and before any risk, greeks or
+        # pending-order reservation, so a block leaves nothing to unwind and the
+        # only remaining gap to the submit is the pending-row write. The
+        # limiter token it may spend is entry-only and does not throttle exits.
+        # A confirmed-shut session is a skip; one that cannot be verified is a
+        # failure. Neither is a broker round-trip, so neither feeds the
+        # error-rate circuit breaker.
+        session = await self._entry_session_state()
+        if session != "open":
+            session_closed = session == "closed"
+            logger.warning(
+                "EXECUTION BLOCKED: options session not confirmed open",
+                extra={
+                    "event_type": "EXECUTION_BLOCKED",
+                    "reason": "Options Session Closed" if session_closed else "Options Session Unverified",
+                    "session_state": session,
+                    "ticker": candidate.ticker,
+                    "option_symbol": candidate.option_symbol,
+                },
+            )
+            if session_closed:
+                decision.executed_successfully = DecisionStatus.SKIPPED
+                decision.reason = "Options session closed"
+            else:
+                decision.executed_successfully = DecisionStatus.FALSE
+                decision.reason = "Options session unverified (calendar or broker clock unavailable)"
             return
 
         if hasattr(self.risk_manager, "update_post_trade"):

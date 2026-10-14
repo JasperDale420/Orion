@@ -206,7 +206,9 @@ class TestPositionMonitorWithoutEngineFailsClosed:
         connector.close_position.return_value = SimpleNamespace(id="order-1")
 
         with patch("orion.execution.position_monitor.send_discord_alert", new_callable=AsyncMock) as alert:
-            results = await self._exit(monitor, connector, _tracked_position(symbol=symbol, option_symbol=option_symbol))
+            results = await self._exit(
+                monitor, connector, _tracked_position(symbol=symbol, option_symbol=option_symbol)
+            )
 
         connector.close_position.assert_not_called()
         assert results[0]["executed"] is False
