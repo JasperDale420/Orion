@@ -707,9 +707,50 @@ class ExecutionEngine:
         a timely one, but a blind submit is worse than both.
 
         CLOSES ONLY. No entry path calls this, and it must never become an entry
-        gate — a dead calendar must never admit new risk, only shed it.
+        gate — a dead calendar must never admit new risk, only shed it. Entries
+        are gated by `_entry_session_state`, which has no fallback.
         """
         return await self._options_window_state(require_fresh=require_fresh) == "open"
+
+    async def _entry_session_state(self) -> str:
+        """``"open"``, ``"closed"`` or ``"unknown"`` for a NEW options entry. Never raises.
+
+        ``"open"`` only when BOTH authorities confirm the regular options session:
+
+        - the exchange calendar. A calendar that cannot answer is ``"unknown"``
+          with no fallback: the broker-clock fallback above exists so closes can
+          shed risk while the calendar is down, and must never admit new risk;
+        - a fresh broker clock read — the authority that accepts, rejects or
+          QUEUES the order (a day order placed after the close rests until the
+          next session instead of being rejected), and the only one that knows
+          about an unscheduled closure. An error, timeout, non-2xx (429) or
+          malformed answer is ``"unknown"`` (see `_classify_broker_clock`).
+
+        Independent of the close gate's cached verdicts: it neither reads nor
+        writes them, so an entry's clock read can never delay or authorize an
+        exit. The clock is read only once the calendar says open.
+        """
+        try:
+            if getattr(self, "_market_schedule", None) is None:
+                from orion.core.market_schedule import MarketSchedule
+
+                self._market_schedule = MarketSchedule()
+            calendar_open = self._market_schedule.is_market_open_for_options()
+        except Exception as exc:
+            logger.critical(
+                f"Exchange calendar unavailable ({exc}) — new option entries are BLOCKED "
+                "until the process is restarted with a working calendar.",
+                extra={"event_type": "ENTRY_BLOCKED_CALENDAR_UNAVAILABLE", "error": str(exc)},
+            )
+            return "unknown"
+        if not calendar_open:
+            return "closed"
+
+        try:
+            clock = await self._get_gateway_client().get_clock()
+        except Exception as exc:
+            clock = {"error": str(exc)}
+        return _classify_broker_clock(clock)
 
     async def options_session_confirmed_closed(self) -> bool:
         """True only when the options session is CONFIRMED shut. Never raises.
@@ -1747,6 +1788,35 @@ class ExecutionEngine:
 
         return True
 
+    @staticmethod
+    def _block_entry_outside_session(decision: Any, candidate: Any, session: str, *, stage: str) -> str:
+        """Record an entry blocked by the session gate; returns the reason.
+
+        A confirmed-shut session is a skip; one that cannot be verified is a
+        failure. Neither is a broker round-trip, so the caller must not record
+        it against the error-rate circuit breaker.
+        """
+        session_closed = session == "closed"
+        reason = (
+            "Options session closed"
+            if session_closed
+            else "Options session unverified (calendar or broker clock unavailable)"
+        )
+        logger.warning(
+            "EXECUTION BLOCKED: options session not confirmed open",
+            extra={
+                "event_type": "EXECUTION_BLOCKED",
+                "reason": "Options Session Closed" if session_closed else "Options Session Unverified",
+                "session_state": session,
+                "stage": stage,
+                "ticker": candidate.ticker,
+                "option_symbol": candidate.option_symbol,
+            },
+        )
+        decision.executed_successfully = DecisionStatus.SKIPPED if session_closed else DecisionStatus.FALSE
+        decision.reason = reason
+        return reason
+
     def _check_circuit_breaker(self) -> bool:
         """Trip when the broker-error rate exceeds threshold within the
         configured time window AND we've seen at least min_samples broker
@@ -1923,6 +1993,18 @@ class ExecutionEngine:
             decision.reason = "Rate limit exceeded"
             return
 
+        # Session fence. Placed after the rate-limiter wait (up to 10s, which
+        # can itself cross the close) and before any risk, greeks or
+        # pending-order reservation, so an entry outside the session leaves
+        # nothing to unwind and no order row. The limiter token it may spend is
+        # entry-only and does not throttle exits. Re-checked immediately before
+        # the submit below, because the reservation and pending-row write in
+        # between can themselves cross the close.
+        session = await self._entry_session_state()
+        if session != "open":
+            self._block_entry_outside_session(decision, candidate, session, stage="pre_reservation")
+            return
+
         if hasattr(self.risk_manager, "update_post_trade"):
             await self.risk_manager.update_post_trade(
                 ticker=candidate.ticker,
@@ -1983,6 +2065,31 @@ class ExecutionEngine:
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = f"Pending-order persist failed: {e}"
             self._record_result(False)
+            return
+
+        # Immediately-before-submit re-check. Alpaca queues a day order placed
+        # after the close instead of rejecting it, so an entry whose session
+        # ended during the reservation or pending-row write above would rest
+        # overnight and open at the next session. Unwind the reservations and
+        # finalize the pending row as never submitted; not a broker round-trip,
+        # so nothing is recorded against the error-rate circuit breaker.
+        session = await self._entry_session_state()
+        if session != "open":
+            await self._remove_pending_order_compat(client_order_id)
+            if hasattr(self.risk_manager, "clear_intended_position_greeks"):
+                self.risk_manager.clear_intended_position_greeks(candidate.ticker)
+            reason = self._block_entry_outside_session(decision, candidate, session, stage="pre_submit")
+            # Always FALSE here, even for a confirmed close: this attempt already
+            # reserved risk and wrote an order row, which is finalized REJECTED
+            # below. A SKIPPED decision with a REJECTED row would be re-labelled
+            # FALSE by startup reconciliation after a crash in between, so the
+            # two are kept consistent from the start (adversarial review).
+            decision.executed_successfully = DecisionStatus.FALSE
+            await persist_order_finalize(
+                client_order_id=client_order_id,
+                broker_order=None,
+                error_message=f"Not submitted: {reason}",
+            )
             return
 
         try:

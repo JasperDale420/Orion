@@ -149,6 +149,25 @@ def reset_bucket_halt_cache():
     reset_halt_cache()
 
 
+@pytest.fixture(autouse=True)
+def confirm_entry_session_open(request, monkeypatch):
+    """Report the options entry session as confirmed open for every test.
+
+    The real check reads the exchange calendar against the wall clock, so any
+    test that drives an entry to the broker would pass during market hours and
+    fail outside them. The gate itself is covered, unstubbed, by the tests
+    marked ``real_entry_session_gate``.
+    """
+    if request.node.get_closest_marker("real_entry_session_gate"):
+        return
+    from orion.execution.execution_engine import ExecutionEngine
+
+    async def _open(self):
+        return "open"
+
+    monkeypatch.setattr(ExecutionEngine, "_entry_session_state", _open)
+
+
 @pytest.fixture
 def risk_manager_factory():
     """Factory fixture to create RiskManager instances with custom config."""
