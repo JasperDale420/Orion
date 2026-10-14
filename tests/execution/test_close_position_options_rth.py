@@ -173,6 +173,8 @@ async def test_calendar_fallback_trusts_the_broker_over_the_wall_clock() -> None
         {},  # no is_open field
         {"is_open": "true"},  # truthy but not the boolean
         ["not", "a", "dict"],  # malformed payload
+        {"is_open": True, "status_code": 429},  # rate-limited, not a clock verdict
+        {"is_open": True, "status_code": 503},
     ],
 )
 @pytest.mark.asyncio
@@ -749,3 +751,58 @@ async def test_options_short_cover_prices_off_fresh_ask(monkeypatch: pytest.Monk
     kwargs = client.create_order.call_args[1]
     assert kwargs["side"] == "buy"
     assert kwargs["limit_price"] == pytest.approx(4.20)
+
+
+@pytest.mark.parametrize(
+    ("clock", "expected"),
+    [
+        ({"is_open": False}, True),  # the broker says shut: a real deferral
+        ({"is_open": True}, False),
+        ({"error": "Server error '500'"}, False),  # unknown is not "closed"
+        ({"is_open": False, "status_code": 429}, False),
+        ({}, False),
+        (["not", "a", "dict"], False),
+    ],
+)
+@pytest.mark.asyncio
+async def test_only_an_unambiguous_closed_clock_confirms_a_shut_session(clock, expected) -> None:
+    """The monitor defers without charging the retry budget only on a CONFIRMED
+    shut session. An unreadable or rate-limited clock is unknown, not closed:
+    treating it as closed would let a position defer forever instead of being
+    abandoned after genuine failures (Codex review)."""
+    engine = _dead_calendar_engine()
+    client = _make_client(broker_qty="10")
+    client.get_clock = AsyncMock(return_value=clock)
+    engine._get_gateway_client = lambda: client
+
+    assert await engine.options_session_confirmed_closed() is expected
+    assert await engine.options_close_window_open() is False or clock == {"is_open": True}
+
+
+@pytest.mark.asyncio
+async def test_calendar_verdict_confirms_a_shut_session_without_the_broker() -> None:
+    engine = _make_engine(market_schedule_returns_options_open=False)
+    client = _make_client(broker_qty="10")
+    client.get_clock = AsyncMock(return_value={"is_open": True})
+    engine._get_gateway_client = lambda: client
+
+    assert await engine.options_session_confirmed_closed() is True
+    client.get_clock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_window_gate_initializes_the_schedule_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The monitor's pre-check runs before close_position has ever built the
+    schedule. The gate must build it rather than fall through to the broker clock
+    on a healthy calendar (Codex review)."""
+    engine = _make_engine()
+    engine._market_schedule = None
+    schedule = MagicMock()
+    schedule.is_market_open_for_options = Mock(return_value=True)
+    monkeypatch.setattr("orion.core.market_schedule.MarketSchedule", lambda: schedule)
+    client = _make_client(broker_qty="10")
+    client.get_clock = AsyncMock(return_value={"is_open": False})
+    engine._get_gateway_client = lambda: client
+
+    assert await engine.options_close_window_open() is True
+    client.get_clock.assert_not_awaited()

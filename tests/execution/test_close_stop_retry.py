@@ -45,6 +45,7 @@ def _engine(*, close_returns=False, options_window_open=True):
     engine = MagicMock()
     engine.close_position = AsyncMock(return_value=close_returns)
     engine.options_close_window_open = AsyncMock(return_value=options_window_open)
+    engine.options_session_confirmed_closed = AsyncMock(return_value=not options_window_open)
     return engine
 
 
@@ -164,7 +165,7 @@ async def test_bell_crossing_mid_batch_defers_only_the_closed_leg():
     it can straddle the bell: the leg attempted while open owns its failure, and
     the leg that arrives after the bell must not be charged for it."""
     engine = _engine()
-    engine.options_close_window_open = AsyncMock(side_effect=[True, False])
+    engine.options_session_confirmed_closed = AsyncMock(side_effect=[False, True])
     monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
     before, after = _pos("AAPL260605C00200000"), _pos("MSFT260605C00400000")
 
@@ -290,3 +291,19 @@ def test_already_expired_position_keeps_the_standard_cooldown(monkeypatch):
         pm._record_close_result(sym, success=False)
     clock["t"] += pm._FLATTEN_ABANDON_COOLDOWN_SECONDS + 1.0
     assert pm._close_attempts_exhausted(sym, expiry_deadline=racing_expiry(stale)) is True
+
+
+@pytest.mark.asyncio
+async def test_unknown_session_state_is_attempted_and_charged():
+    """A session the engine cannot confirm as shut (unreadable or rate-limited
+    broker clock while the calendar is down) is NOT a deferral: the close is
+    attempted, the engine's own gate fails it closed, and the failure counts, so
+    a position cannot defer forever behind an unreadable clock (Codex review)."""
+    engine = _engine(options_window_open=False)
+    engine.options_session_confirmed_closed = AsyncMock(return_value=False)
+    monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
+
+    await _run(monitor, engine, monitor._MAX_CONSECUTIVE_CLOSE_FAILURES)
+
+    assert monitor._close_attempts_exhausted("SMH260605P00550000") is True
+    assert engine.close_position.await_count == monitor._MAX_CONSECUTIVE_CLOSE_FAILURES

@@ -209,12 +209,12 @@ _CANCEL_LEGACY_UNOWNED_MARKER = "gw-e4404"
 # verdict is reused. Closed is the state the every-~5s retry across every open
 # position sits in, so caching it is what keeps the fallback off a Gateway that
 # has answered a 429 storm before. An OPEN verdict is never cached — see
-# `_broker_market_open`.
+# `_broker_window_state`.
 _CLOCK_CLOSED_CACHE_S = 10.0
 
 # How long an OPEN verdict may be reused, and only by the advisory gates: the
-# monitor's pre-check and the engine's entry gate land milliseconds apart on the
-# same close attempt, so without this each attempt re-reads the clock several
+# monitor's pre-check and close_position's opening gate land milliseconds apart
+# on the same close attempt, so without this each attempt re-reads the clock several
 # times over — and a 429 storm during an outage delays every exit at exactly the
 # wrong moment. The immediately-before-submit check always re-reads, so this
 # never widens the one-round-trip staleness that check already cannot avoid.
@@ -222,6 +222,25 @@ _CLOCK_OPEN_REUSE_S = 1.0
 
 # How often the operator is re-alerted while exits run without a calendar.
 _CALENDAR_ALERT_INTERVAL_S = 300.0
+
+
+def _classify_broker_clock(clock: Any) -> str:
+    """``"open"``/``"closed"`` only for a well-formed, successful clock payload
+    carrying a boolean ``is_open``; ``"unknown"`` for anything else (an error, a
+    non-2xx ``status_code`` such as a 429, a missing or non-boolean field, or a
+    non-dict payload). Unknown never authorizes a submit and never counts as a
+    confirmed shut session."""
+    if not isinstance(clock, dict) or "error" in clock:
+        return "unknown"
+    status = clock.get("status_code")
+    if status is not None and not (isinstance(status, int) and 200 <= status < 300):
+        return "unknown"
+    is_open = clock.get("is_open")
+    if is_open is True:
+        return "open"
+    if is_open is False:
+        return "closed"
+    return "unknown"
 
 
 def _is_legacy_unowned_cancel_rejection(result: dict[str, Any]) -> bool:
@@ -610,6 +629,7 @@ class ExecutionEngine:
     # so an engine built without __init__ (tests, and the close path's lazy
     # wiring) still works.
     _clock_closed_until: float | None = None
+    _clock_closed_state: str = "unknown"
     _clock_open_until: float | None = None
     _calendar_alert_ts: float = float("-inf")
 
@@ -686,13 +706,38 @@ class ExecutionEngine:
         Fails closed when the clock cannot be read: a delayed exit is worse than
         a timely one, but a blind submit is worse than both.
 
-        CLOSES ONLY. Entries keep using the strict calendar gate — a dead
-        calendar must never admit new risk, only shed it.
+        CLOSES ONLY. No entry path calls this, and it must never become an entry
+        gate — a dead calendar must never admit new risk, only shed it.
         """
+        return await self._options_window_state(require_fresh=require_fresh) == "open"
+
+    async def options_session_confirmed_closed(self) -> bool:
+        """True only when the options session is CONFIRMED shut. Never raises.
+
+        The position monitor defers a close without charging its retry budget
+        only on this verdict. An unknown session (calendar down AND the broker
+        clock unreadable, errored, rate-limited or malformed) is not confirmed
+        shut: the close is attempted, `close_position`'s own gate fails it
+        closed, and the failure counts — otherwise a position could defer forever
+        behind an unreadable clock instead of being abandoned and alerted on.
+        """
+        return await self._options_window_state(require_fresh=False) == "closed"
+
+    async def _options_window_state(self, *, require_fresh: bool) -> str:
+        """``"open"``, ``"closed"`` or ``"unknown"`` for the options session.
+
+        Builds the schedule on first use: the monitor's pre-check can run before
+        `close_position` ever has, and a missing schedule must not masquerade as
+        a calendar failure and push a healthy process onto the broker clock.
+        """
+        if getattr(self, "_market_schedule", None) is None:
+            from orion.core.market_schedule import MarketSchedule
+
+            self._market_schedule = MarketSchedule()
         try:
-            return bool(self._market_schedule.is_market_open_for_options())
+            return "open" if self._market_schedule.is_market_open_for_options() else "closed"
         except Exception as exc:
-            return await self._broker_market_open(exc, require_fresh=require_fresh)
+            return await self._broker_window_state(exc, require_fresh=require_fresh)
 
     async def _options_close_window_still_open(self, ticker: str) -> bool:
         """Re-check the window immediately before an options submit.
@@ -717,7 +762,7 @@ class ExecutionEngine:
         )
         return False
 
-    async def _broker_market_open(self, calendar_exc: Exception, *, require_fresh: bool) -> bool:
+    async def _broker_window_state(self, calendar_exc: Exception, *, require_fresh: bool) -> str:
         """Broker-clock read. Only reached while the calendar is down.
 
         A CLOSED verdict is cached for seconds — that is the state the
@@ -733,20 +778,22 @@ class ExecutionEngine:
         """
         now = time.monotonic()
         if self._clock_closed_until is not None and now < self._clock_closed_until:
-            return False
+            return self._clock_closed_state
         if not require_fresh and self._clock_open_until is not None and now < self._clock_open_until:
-            return True
+            return "open"
 
         try:
             clock = await self._get_gateway_client().get_clock()
         except Exception as exc:
             clock = {"error": str(exc)}
 
-        # Anything that is not an unambiguous `is_open: True` from a well-formed
-        # payload counts as closed — a malformed or errored clock must not
-        # authorize a submit.
-        is_open = isinstance(clock, dict) and "error" not in clock and clock.get("is_open") is True
+        state = _classify_broker_clock(clock)
+        is_open = state == "open"
+        # Not-open verdicts (confirmed closed AND unknown) are cached alike: both
+        # block a submit, and caching unknown is what keeps the retry loop off a
+        # Gateway that is answering 429s.
         self._clock_closed_until = None if is_open else now + _CLOCK_CLOSED_CACHE_S
+        self._clock_closed_state = state
         self._clock_open_until = now + _CLOCK_OPEN_REUSE_S if is_open else None
 
         if now - self._calendar_alert_ts >= _CALENDAR_ALERT_INTERVAL_S:
@@ -754,15 +801,16 @@ class ExecutionEngine:
             logger.critical(
                 f"Exchange calendar unavailable ({calendar_exc}) — option CLOSES are "
                 f"gated on the broker clock instead (market currently "
-                f"{'OPEN' if is_open else 'CLOSED'}). New entries stay blocked. Restart "
+                f"{state.upper()}). Entries never use this fallback. Restart "
                 f"the process to reload the calendar and verify open positions are exiting.",
                 extra={
                     "event_type": "OPTIONS_CLOSE_GATE_DEGRADED",
                     "error": str(calendar_exc),
                     "broker_market_open": is_open,
+                    "broker_clock_state": state,
                 },
             )
-        return is_open
+        return state
 
     async def _live_position_qty(self, ticker: str) -> float | None:
         """Signed live broker qty for `ticker`: 0.0 if flat, None if it could

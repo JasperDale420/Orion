@@ -136,9 +136,9 @@ class TestPositionMonitorRouting:
         routing on it, and a monitor exit is always meant to close now."""
         engine = MagicMock()
         engine.close_position = AsyncMock(return_value=True)
-        # Option exits consult the session window before each attempt; an open
-        # session lets this exit reach close_position.
-        engine.options_close_window_open = AsyncMock(return_value=True)
+        # Option exits consult the session before each attempt; a session that
+        # is not confirmed shut lets this exit reach close_position.
+        engine.options_session_confirmed_closed = AsyncMock(return_value=False)
 
         pm = PositionManager()
         monitor = PositionMonitor(execution_engine=engine, position_manager=pm)

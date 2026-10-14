@@ -1462,7 +1462,8 @@ class PositionMonitor:
                     results.append(result)
                     continue
 
-                # A shut options session is a DEFERRAL, not a failed close — so
+                # A CONFIRMED shut options session is a DEFERRAL, not a failed
+                # close (an unknown session is attempted and charged) — so
                 # don't attempt, and don't spend an attempt from the budget.
                 # Counting these burns the whole budget overnight (five cycles
                 # is under half a minute) and abandons the position into a
@@ -1481,7 +1482,7 @@ class PositionMonitor:
                 if (
                     _is_occ_option_symbol(pos.symbol)
                     and self._execution_engine is not None
-                    and not await self._execution_engine.options_close_window_open()
+                    and await self._execution_engine.options_session_confirmed_closed()
                 ):
                     result["error"] = "options_session_closed"
                     results.append(result)
