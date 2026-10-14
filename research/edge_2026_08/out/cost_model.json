@@ -1,0 +1,8 @@
+{
+  "spread_pct_median": 0.0194,
+  "spread_pct_mean": 0.0285,
+  "spread_pct_p90": 0.0636,
+  "phi_payup": 0.25,
+  "roundtrip_drag_median": 0.012125,
+  "source": "orion strategy_decisions.decision_trace_json.entry_quote, n=1501"
+}

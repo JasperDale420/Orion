@@ -3,8 +3,6 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from sqlalchemy import text
-
 
 class SchemaValidationError(ValueError):
     """Raised when runtime payload columns do not match table schema."""
@@ -19,26 +17,6 @@ class SchemaValidationError(ValueError):
         super().__init__(message)
         self.unknown_columns = tuple(sorted(set(unknown_columns or [])))
         self.missing_columns = tuple(sorted(set(missing_columns or [])))
-
-
-async def fetch_table_columns(session: Any, table_name: str, schema: str = "public") -> set[str]:
-    """Read column names for a table from information_schema."""
-    stmt = text(
-        """
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = :schema
-          AND table_name = :table_name
-        """
-    )
-    result = await session.execute(stmt, {"schema": schema, "table_name": table_name})
-    columns = {row[0] for row in result.fetchall()}
-    if not columns:
-        raise SchemaValidationError(
-            f"No columns found for table {schema}.{table_name}",
-            missing_columns=[table_name],
-        )
-    return columns
 
 
 def resolve_insert_columns(

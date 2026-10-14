@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 
@@ -13,8 +15,8 @@ async def test_process_fill_long_profit(risk_manager_factory):
     assert pos["qty"] == 10
     assert pos["avg_entry"] == pytest.approx(100.0)
 
-    # 2. Sell 10 @ 110 (Profit 100)
-    await rm.process_fill("AAPL", 10, 110.0, "sell", fill_id="mock_2")
+    # 2. Sell 10 @ 110 (Profit 100), executed this session so it credits the daily figure
+    await rm.process_fill("AAPL", 10, 110.0, "sell", fill_id="mock_2", filled_at=datetime.now(UTC))
     pos = rm.positions["AAPL"]
     assert pos["qty"] == 0
 

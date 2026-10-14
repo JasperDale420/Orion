@@ -16,12 +16,16 @@ from orion.analysis.regime import (
     SessionRegime,
     VIXRegime,
     VolRegime,
+    is_trusted_vix_source,
 )
 
 logger = logging.getLogger(__name__)
 
-# Load config
-CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "regime_risk.yaml"
+# Load config. Four parents from src/orion/analysis/regime_risk.py reaches
+# the repo root, where config/regime_risk.yaml actually lives (three parents
+# lands in src/ instead — silently returning {} and defaulting every
+# multiplier to 1.0 since this module's original commit, 2026-01-02).
+CONFIG_PATH = Path(__file__).parent.parent.parent.parent / "config" / "regime_risk.yaml"
 
 
 def _load_regime_risk_config() -> dict[str, Any]:
@@ -56,8 +60,17 @@ class RegimeRiskManager:
         self.session_mult = _CONFIG.get("session_multipliers", {})
         self.min_confidence = _CONFIG.get("min_confidence_to_trade", 0.4)
 
-    def get_vol_multiplier(self, regime: VolRegime) -> float:
-        """Get position size multiplier for volatility regime."""
+    def get_vol_multiplier(self, regime: VolRegime, vix_trusted: bool = False) -> float:
+        """Get position size multiplier for volatility regime.
+
+        A SHOCK classification backed by an untrusted vix source (e.g. the
+        VIXY-ETF-price proxy, not a real spot-VIX print) is capped at the
+        HIGH-tier multiplier instead of SHOCK's own — SHOCK's multiplier is
+        0.0, which would silently zero out sizing (an effective hard block)
+        on a signal that hasn't been confirmed.
+        """
+        if regime == VolRegime.SHOCK and not vix_trusted:
+            return self.vol_mult.get(VolRegime.HIGH.value, 1.0)
         return self.vol_mult.get(regime.value, 1.0)
 
     def get_risk_multiplier(self, regime: RiskRegime) -> float:
@@ -78,7 +91,8 @@ class RegimeRiskManager:
 
         final_size = base_size * vol_mult * risk_mult * vix_mult * session_mult
         """
-        vol_m = self.get_vol_multiplier(snapshot.vol)
+        vix_trusted = is_trusted_vix_source(snapshot.vix_source)
+        vol_m = self.get_vol_multiplier(snapshot.vol, vix_trusted)
         risk_m = self.get_risk_multiplier(snapshot.risk)
         vix_m = self.get_vix_multiplier(snapshot.vix_regime)
         session_m = self.get_session_multiplier(snapshot.session)
@@ -100,10 +114,10 @@ class RegimeRiskManager:
         Check if current regime allows trading.
 
         Returns False if:
-        - Vol regime is SHOCK
+        - Vol regime is SHOCK, backed by a trusted vix source
         - Combined multiplier would be 0
         """
-        if snapshot.vol == VolRegime.SHOCK:
+        if snapshot.vol == VolRegime.SHOCK and is_trusted_vix_source(snapshot.vix_source):
             return False
 
         combined = self.calculate_combined_multiplier(snapshot)

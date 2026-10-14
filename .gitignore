@@ -94,3 +94,10 @@ learn/
 # Local DB dumps / operational baselines (e.g. pre-migration pg_dump snapshots).
 # Multi-hundred-MB binaries that must never enter git history.
 backups/
+
+# Edge-research intermediate parquet panels (regenerate with research/edge_2026_08/build_dataset.py)
+research/edge_2026_08/out/*.parquet
+research/edge_2026_08/out_build.log
+research/**/*.parquet
+research/**/out_build.log
+research/**/__pycache__/

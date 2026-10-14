@@ -11,6 +11,8 @@ import contextlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from orion.core.service_lease import acquire_service_lease, renew_service_lease
 from orion.shared.async_main import run_service
 from orion.shared.logger import setup_logging
@@ -85,7 +87,25 @@ async def _renew_lease_forever(run_id: str, shutdown_event: asyncio.Event) -> No
     while True:
         await asyncio.sleep(_LEASE_RENEW_INTERVAL_SECONDS)
         await renew_service_lease(_LEASE_SERVICE_ID, run_id)
-        if not await _lease_is_ours(run_id):
+        try:
+            lease_is_ours = await _lease_is_ours(run_id)
+        except (OSError, SQLAlchemyError) as exc:
+            # A transient DB blip (e.g. a Docker VM restart) here is "unknown,
+            # retry" — not confirmed loss (which is fatal below) and not
+            # confirmed ownership. Skip this tick and let the next one check
+            # again rather than crashing the heartbeat for the rest of the
+            # process's life.
+            logger.warning(
+                "service_lease_check_failed",
+                extra={
+                    "event_type": "SERVICE_LEASE_CHECK_FAILED",
+                    "service_id": _LEASE_SERVICE_ID,
+                    "run_id": run_id,
+                    "error": str(exc),
+                },
+            )
+            continue
+        if not lease_is_ours:
             shutdown_event.set()
             logger.critical(
                 "data_quality_lease_lost",

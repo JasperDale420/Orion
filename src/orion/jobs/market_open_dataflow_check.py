@@ -332,7 +332,10 @@ def _discord_notifier(result: DataflowResult) -> None:
     req = urllib.request.Request(
         url,
         data=json.dumps({"content": content}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Orion-market-open-dataflow-check/1.0",
+        },
     )
     urllib.request.urlopen(req, timeout=5).read()  # noqa: S310 — fixed https webhook URL
 

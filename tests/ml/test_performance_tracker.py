@@ -447,6 +447,88 @@ class TestLogOutcome:
 
         assert result is False
 
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    @patch("orion.ml.performance_tracker.db_write", new_callable=AsyncMock)
+    async def test_log_outcome_binds_return_pct_with_explicit_float_type(self, mock_db_write: AsyncMock) -> None:
+        """`:return_pct` is used twice in the UPDATE — as the Float column value
+        and inside `:return_pct >= 0`. Untyped, asyncpg deduces double precision
+        from the first use and integer from the second and rejects the statement
+        with AmbiguousParameterError on every exit ("Failed to log outcome").
+        The bind must carry an explicit Float type so both renderings agree.
+        """
+        from sqlalchemy import Float
+        from sqlalchemy.dialects.postgresql import asyncpg as pg_asyncpg
+
+        mock_db_write.side_effect = _make_db_write_side_effect()
+
+        await log_outcome(position_id="pos-typed", actual_return_pct=0, hit_target=False, hit_stop=False)
+
+        write_fn = mock_db_write.call_args[0][0]
+        mock_session = await _await_write_fn(write_fn)
+        stmt = mock_session.execute.call_args[0][0]
+
+        assert isinstance(stmt._bindparams["return_pct"].type, Float)
+
+        compiled = stmt.compile(dialect=pg_asyncpg.dialect())
+        placeholder = f"${compiled.positiontup.index('return_pct') + 1}"
+        rendered = str(compiled)
+        assert rendered.count(f"{placeholder}::FLOAT") == 2, rendered
+        assert rendered.count(placeholder) == 2, f"untyped use of {placeholder} remains: {rendered}"
+
+
+class TestLogOutcomeRealDB:
+    """`log_outcome` must actually update the row through the real await chain
+    on the in-memory test DB, for both an int-valued and a float-valued return.
+    """
+
+    @staticmethod
+    async def _seed_exit_prediction(position_id: str) -> str:
+        prediction_id = await log_exit_prediction(
+            symbol="AAPL",
+            option_chain="AAPL260522C00200000",
+            bucket="SWING",
+            prediction_score=0.9,
+            position_id=position_id,
+        )
+        assert prediction_id is not None
+        return prediction_id
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("return_pct", [0, 12.5])
+    async def test_log_outcome_updates_row_for_int_and_float_returns(self, return_pct: float) -> None:
+        from sqlalchemy import text
+
+        from orion.storage.db import async_session_factory, init_db
+
+        await init_db()
+        position_id = f"pos-outcome-{return_pct}"
+        prediction_id = await self._seed_exit_prediction(position_id)
+
+        result = await log_outcome(
+            position_id=position_id,
+            actual_return_pct=return_pct,
+            hit_target=False,
+            hit_stop=False,
+        )
+
+        assert result is True, "log_outcome must not swallow a failed UPDATE"
+
+        async with async_session_factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT outcome_ts, actual_return_pct, prediction_correct FROM ml_predictions WHERE id = :id"),
+                    {"id": prediction_id},
+                )
+            ).fetchone()
+
+        assert row is not None
+        assert row[0] is not None, "outcome_ts must be stamped"
+        assert abs(float(row[1]) - float(return_pct)) < 1e-9
+        # exit_score with prediction_class=1 and a non-negative return is correct.
+        assert bool(row[2]) is True
+
 
 # ---------------------------------------------------------------------------
 # get_daily_accuracy

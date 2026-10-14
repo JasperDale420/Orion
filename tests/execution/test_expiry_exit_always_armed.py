@@ -16,6 +16,8 @@ without touching the database.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -24,10 +26,16 @@ from orion.execution.position_monitor import _expiry_from_occ_symbol
 
 pytestmark = pytest.mark.unit
 
+_ET = ZoneInfo("America/New_York")
+
 
 def _occ_for(days_out: int) -> str:
-    """An OCC call symbol expiring `days_out` days from today."""
-    d = (datetime.now(UTC) + timedelta(days=days_out)).strftime("%y%m%d")
+    """An OCC call symbol expiring `days_out` calendar days from today (ET).
+
+    The rule counts days from the New York date, so the fixture must too —
+    otherwise a suite run between 20:00 and 24:00 ET reads one day ahead.
+    """
+    d = (datetime.now(_ET).date() + timedelta(days=days_out)).strftime("%y%m%d")
     return f"AAPL{d}C00312500"
 
 
@@ -85,26 +93,35 @@ def test_expiry_is_midnight_utc_matching_the_db_convention():
     assert (got.hour, got.minute, got.second) == (0, 0, 0)
 
 
-@pytest.mark.parametrize("min_dte", [1, 2])
-def test_time_stop_is_reachable_during_a_trading_session(min_dte):
-    """The exit must arm while the market is OPEN, not after the close.
+@pytest.mark.parametrize(("min_dte", "fires_at_dte"), [(1, 0), (2, 1)])
+def test_time_stop_is_reachable_during_a_trading_session(min_dte, fires_at_dte):
+    """The exit must arm while the market is OPEN, on a session before expiry.
 
-    Friday expiry, evaluated at 15:00 ET (19:00 UTC) on the session min_dte days
-    earlier — the rule has to be firing already, or the position has no
-    executable exit left before expiry day.
+    Friday expiry, evaluated at 15:00 ET on the weekday `fires_at_dte` calendar
+    days earlier: the rule has to be firing there (an executable intraday exit),
+    and still quiet one day earlier (no premature dump of a valid position).
     """
     from datetime import date as _date
 
-    friday = _date(2026, 7, 17)  # a Friday expiry
-    expiry = datetime(friday.year, friday.month, friday.day, tzinfo=UTC)
+    expiry = datetime(2026, 7, 17, tzinfo=UTC)  # a Friday expiry
 
     class _Pos:
         expiry_date = expiry
 
-    # 15:00 ET == 19:00 UTC, min_dte sessions before expiry.
-    now = expiry - timedelta(days=min_dte) + timedelta(hours=19)
-    remaining_days = (expiry - now).total_seconds() / 86400.0
-    assert remaining_days <= min_dte, (
-        f"at 15:00 ET {min_dte}d before a Friday expiry, remaining={remaining_days:.3f}d "
-        f"must already be <= min_dte={min_dte} for the exit to be executable intraday"
-    )
+    def _at_15_et(dte: int) -> datetime:
+        day = _date(2026, 7, 17) - timedelta(days=dte)
+        return datetime(day.year, day.month, day.day, 15, 0, tzinfo=_ET)
+
+    def _frozen(moment: datetime):
+        return patch(
+            "orion.execution.exit_fallback_rules.datetime",
+            **{"now.side_effect": lambda tz=None: moment.astimezone(tz or UTC)},
+        )
+
+    rule = TimeToExpiryRule(min_dte=min_dte)
+    with _frozen(_at_15_et(fires_at_dte)):
+        assert rule.should_exit(_Pos()) is not None, (
+            f"min_dte={min_dte} must fire at dte={fires_at_dte}, while the session is open"
+        )
+    with _frozen(_at_15_et(fires_at_dte + 1)):
+        assert rule.should_exit(_Pos()) is None, f"min_dte={min_dte} must stay quiet at dte={fires_at_dte + 1}"

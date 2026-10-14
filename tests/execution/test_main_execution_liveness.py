@@ -28,7 +28,8 @@ async def test_startup_liveness_publishes_until_shutdown(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_execution_liveness_publishes_after_each_candidate(monkeypatch) -> None:
+@pytest.mark.parametrize("gateway_snapshot", [None, {}])
+async def test_execution_liveness_publishes_after_each_candidate(monkeypatch, gateway_snapshot) -> None:
     shutdown = asyncio.Event()
     candidates = [SimpleNamespace(ticker="AAPL"), SimpleNamespace(ticker="MSFT")]
     decision = SimpleNamespace(
@@ -55,6 +56,7 @@ async def test_execution_liveness_publishes_after_each_candidate(monkeypatch) ->
     execution_engine.acquire_service_lease = AsyncMock()
     execution_engine.initialize = AsyncMock()
     execution_engine.poll_fills = AsyncMock()
+    execution_engine.gateway_positions_snapshot = gateway_snapshot
 
     signal_engine = MagicMock()
     signal_engine.initialize = AsyncMock()
@@ -62,6 +64,7 @@ async def test_execution_liveness_publishes_after_each_candidate(monkeypatch) ->
 
     position_manager = MagicMock()
     position_manager.initialize = AsyncMock()
+    position_manager.reconcile_with_broker_positions = MagicMock()
     position_manager.get_open_positions.return_value = []
 
     monkeypatch.setattr(main_execution, "wait_for_db", AsyncMock())
@@ -88,3 +91,8 @@ async def test_execution_liveness_publishes_after_each_candidate(monkeypatch) ->
 
     assert update_status.await_count == 2
     assert publish_liveness.await_count >= 2
+    if gateway_snapshot is None:
+        position_manager.reconcile_with_broker_positions.assert_not_called()
+        position_manager.get_open_positions.assert_not_called()
+    else:
+        position_manager.reconcile_with_broker_positions.assert_called_once_with({})

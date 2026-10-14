@@ -8,6 +8,7 @@ Verifies the contract established in Phase 2 Task 2.3:
 """
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from orion.execution.position_monitor import PositionMonitor, TrackedPosition
 
@@ -38,6 +39,13 @@ def _tracked_position(
     )
 
 
+class _AllContextsResolved(set):
+    """Stands in for `_entry_context_applied` with every symbol resolved."""
+
+    def __contains__(self, item: object) -> bool:
+        return True
+
+
 def _build_monitor_with_classifier(classifier) -> PositionMonitor:
     """Construct a PositionMonitor without going through __init__'s side effects.
 
@@ -47,6 +55,14 @@ def _build_monitor_with_classifier(classifier) -> PositionMonitor:
     monitor = PositionMonitor.__new__(PositionMonitor)
     monitor.tracked_positions = {}
     monitor.exit_classifier = classifier
+    # These tests exercise steady-state positions, i.e. ones whose entry context
+    # has already resolved. evaluate_exits withholds the classifier from a
+    # position still being enriched, so say so explicitly rather than having
+    # every case enumerate its own symbols.
+    monitor._entry_context_applied = _AllContextsResolved()
+    monitor._context_deferred_since = {}
+    monitor._context_defer_warned_at = {}
+    monitor._policy_failure_paged = set()
     return monitor
 
 
@@ -89,6 +105,10 @@ def test_fallback_exception_falls_through_to_ml_classifier(monkeypatch, caplog):
     predict_called_for: list[str] = []
 
     class _ClassifierBenign:
+        # A loaded model per bucket — the classifier is only consulted for
+        # buckets that have one.
+        models = {"POSITION": object(), "SWING": object()}
+
         def predict(self, features):
             # Capture the bucket so we can correlate to a position symbol.
             predict_called_for.append(features.bucket)
@@ -186,6 +206,8 @@ def test_fallback_rules_called_once_per_tracked_position(monkeypatch):
     monkeypatch.setattr(efr, "evaluate_fallback_rules", _spy)
 
     class _ClassifierBenign:
+        models = {"SWING": object()}
+
         def predict(self, _features):
             return SimpleNamespace(should_exit=False, confidence=0.0, reasoning="hold")
 
@@ -247,6 +269,8 @@ def test_session_close_resolved_once_and_passed_to_fallback_rules(monkeypatch):
     monkeypatch.setattr(efr, "evaluate_fallback_rules", _spy)
 
     class _ClassifierBenign:
+        models = {"SWING": object()}
+
         def predict(self, _features):
             return SimpleNamespace(should_exit=False, confidence=0.0, reasoning="hold")
 
@@ -260,3 +284,163 @@ def test_session_close_resolved_once_and_passed_to_fallback_rules(monkeypatch):
     assert seen_session_close == [session_close] * 3
     # One calendar lookup per cycle, not per position.
     assert len(resolve_calls) == 1
+
+
+# --- Test 5-7: without a loaded exit model, the barriers ARE the policy -------
+#
+# No `*_exit.pkl` has been deployed since 2026-07-01, so `BucketExitClassifier.predict`
+# always ran its heuristic — whose SWING stop (-20%) is tighter than the
+# documented -40% barrier and therefore always won. July: 9 heuristic stops,
+# 5 of them within 30 minutes of entry on bid/ask noise.
+
+
+class _NoModelClassifier:
+    """The production shape since 2026-07-01: a classifier with nothing loaded."""
+
+    models: dict = {}
+
+    def predict(self, _features):
+        raise AssertionError("classifier MUST NOT be consulted when no exit model is loaded for the bucket")
+
+
+def test_evaluate_exits_no_heuristic_stop_when_no_exit_model():
+    """SWING at -22%: inside the documented -40% stop, so NO exit — the
+    heuristic's -20% stop must not pre-empt the barrier."""
+    monitor = _build_monitor_with_classifier(_NoModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-22.0, bucket="SWING"),
+    }
+
+    assert monitor.evaluate_exits() == []
+
+
+def test_evaluate_exits_deterministic_barrier_still_fires():
+    """Same position at -45%: the documented stop fires, with its own identity."""
+    monitor = _build_monitor_with_classifier(_NoModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-45.0, bucket="SWING"),
+    }
+
+    signals = monitor.evaluate_exits()
+
+    assert len(signals) == 1
+    pos, pred = signals[0]
+    assert pos.symbol == "SWING_POS"
+    assert pred.should_exit is True
+    assert pred.rule_id == "stop_loss_v1"
+
+
+def test_evaluate_exits_uses_model_when_loaded():
+    """A loaded model for the bucket keeps the classifier in the loop after the
+    barriers pass — the model's verdict is what fires."""
+    predict_called_for: list[str] = []
+
+    class _LoadedModelClassifier:
+        models = {"SWING": object()}
+
+        def predict(self, features):
+            predict_called_for.append(features.bucket)
+            return SimpleNamespace(should_exit=True, confidence=0.9, reasoning="ML exit score: 0.90")
+
+    monitor = _build_monitor_with_classifier(_LoadedModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-22.0, bucket="SWING"),
+        # No model for SHORT_SWING: barriers only, and -22% is inside its -35% stop.
+        "SS_POS": _tracked_position(symbol="SS_POS", return_pct_value=-22.0, bucket="SHORT_SWING"),
+    }
+
+    signals = monitor.evaluate_exits()
+
+    assert predict_called_for == ["SWING"]
+    assert [(pos.symbol, pred.reasoning) for pos, pred in signals] == [("SWING_POS", "ML exit score: 0.90")]
+
+
+# --- Test 8-10: a raising policy evaluation fails CLOSED, never to "no policy" -
+#
+# With the classifier bypassed when no model is loaded, an exception inside the
+# deterministic evaluation (a bad ORION_EXIT_BUCKET_OVERRIDES entry, schema
+# drift on expiry_date, …) must not leave the position with no exit policy at
+# all. The evaluation is retried with the unoverridden bucket defaults; only if
+# that also raises does the classifier become the last resort.
+
+
+def test_policy_exception_retries_with_default_barriers(monkeypatch):
+    """First evaluation raises; the retry with DEFAULT_BUCKET_PARAMS is what
+    fires, and the classifier is never consulted."""
+    from orion.execution import exit_fallback_rules as efr
+
+    seen_params: list[object] = []
+    real_fn = efr.evaluate_fallback_rules
+
+    def _raise_once(position, **kwargs):
+        seen_params.append(kwargs["params"])
+        if len(seen_params) == 1:
+            raise RuntimeError("synthetic override failure")
+        return real_fn(position, **kwargs)
+
+    monkeypatch.setattr(efr, "evaluate_fallback_rules", _raise_once)
+
+    monitor = _build_monitor_with_classifier(_NoModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-45.0, bucket="SWING"),
+    }
+
+    signals = monitor.evaluate_exits()
+
+    assert len(seen_params) == 2
+    assert seen_params[1] == efr.DEFAULT_BUCKET_PARAMS["SWING"], "retry must use the unoverridden defaults"
+    assert [(pos.symbol, pred.rule_id) for pos, pred in signals] == [("SWING_POS", "stop_loss_v1")]
+
+
+def test_policy_exception_on_both_attempts_falls_back_to_classifier_and_pages(monkeypatch, caplog):
+    """Both evaluations raise: CRITICAL EXIT_POLICY_EVALUATION_FAILED, and the
+    classifier IS consulted for that position even though no model is loaded."""
+    import logging
+
+    from orion.execution import exit_fallback_rules as efr
+
+    def _always_raise(position, **kwargs):
+        raise RuntimeError("synthetic policy failure")
+
+    monkeypatch.setattr(efr, "evaluate_fallback_rules", _always_raise)
+
+    predict_called_for: list[str] = []
+
+    class _NoModelButConsulted:
+        models: dict = {}
+
+        def predict(self, features):
+            predict_called_for.append(features.bucket)
+            return SimpleNamespace(should_exit=False, confidence=0.0, reasoning="hold")
+
+    monitor = _build_monitor_with_classifier(_NoModelButConsulted())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-45.0, bucket="SWING"),
+    }
+
+    caplog.set_level(logging.ERROR, logger="orion.execution.position_monitor")
+    signals = monitor.evaluate_exits()
+
+    assert predict_called_for == ["SWING"], "classifier is the last resort when the policy cannot be evaluated"
+    assert signals == []
+    critical = [r for r in caplog.records if r.levelno == logging.CRITICAL]
+    assert any("EXIT_POLICY_EVALUATION_FAILED" in r.getMessage() for r in critical), (
+        f"expected an EXIT_POLICY_EVALUATION_FAILED critical, got: {[r.getMessage() for r in critical]}"
+    )
+
+
+def test_disaster_valve_still_fires_when_override_path_raises(monkeypatch):
+    """A malformed ORION_EXIT_BUCKET_OVERRIDES entry makes resolve_exit_params
+    raise; a -70% position must still exit on the default disaster valve."""
+    from orion.config import system_settings
+
+    monkeypatch.setattr(system_settings, "exit_bucket_overrides", {"SWING": {"not_a_field": 1}})
+
+    monitor = _build_monitor_with_classifier(_NoModelClassifier())
+    monitor.tracked_positions = {
+        "SWING_POS": _tracked_position(symbol="SWING_POS", return_pct_value=-70.0, bucket="SWING"),
+    }
+
+    signals = monitor.evaluate_exits()
+
+    assert [(pos.symbol, pred.rule_id) for pos, pred in signals] == [("SWING_POS", "disaster_valve_v1")]

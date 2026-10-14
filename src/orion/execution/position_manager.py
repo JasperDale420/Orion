@@ -221,6 +221,37 @@ class PositionManager:
         """Return all open positions."""
         return list(self._positions.values())
 
+    def reconcile_with_broker_positions(self, broker_positions: dict[str, dict[str, float]]) -> None:
+        """Keep only broker-confirmed positions, one latest record per symbol."""
+        previous_count = len(self._positions)
+        latest_by_symbol: dict[str, OpenPosition] = {}
+
+        for position in self._positions.values():
+            symbol = position.option_chain or position.ticker
+            broker_position = broker_positions.get(symbol)
+            if broker_position is None:
+                continue
+
+            qty = abs(float(broker_position.get("qty", 0.0)))
+            if qty <= 1e-9:
+                continue
+
+            position.qty = qty
+            current = latest_by_symbol.get(symbol)
+            if current is None or position.entry_ts > current.entry_ts:
+                latest_by_symbol[symbol] = position
+
+        self._positions = {position.candidate_id: position for position in latest_by_symbol.values()}
+        logger.info(
+            "PositionManager reconciled with broker",
+            extra={
+                "event_type": "POSITION_MANAGER_BROKER_RECONCILED",
+                "broker_count": len(broker_positions),
+                "retained_count": len(self._positions),
+                "removed_count": previous_count - len(self._positions),
+            },
+        )
+
     def remove_position(self, identifier: str) -> OpenPosition | None:
         """
         Remove position after exit.
@@ -256,25 +287,16 @@ class PositionManager:
             import asyncio
 
             broker_positions = await asyncio.to_thread(connector.client.get_all_positions)
-            broker_tickers = {str(p.symbol) for p in broker_positions}
-
-            # Remove positions not at broker
-            to_remove = [
-                candidate_id
-                for candidate_id, position in self._positions.items()
-                if position.ticker not in broker_tickers
-            ]
-            for candidate_id in to_remove:
-                removed = self.remove_position(candidate_id)
-                if removed:
-                    logger.info(f"Position {removed.ticker} removed - not found at broker")
-
-            logger.info(
-                "PositionManager synced with broker",
-                extra={"broker_count": len(broker_tickers), "tracked_count": len(self._positions)},
-            )
+            snapshot = {
+                str(position.symbol): {
+                    "qty": float(position.qty),
+                    "avg_entry": float(getattr(position, "avg_entry_price", 0.0)),
+                }
+                for position in broker_positions
+            }
+            self.reconcile_with_broker_positions(snapshot)
         except Exception as e:
-            logger.error(f"Failed to sync with broker: {e}")
+            logger.error(f"Failed to sync PositionManager with broker: {e}", exc_info=True)
 
     @staticmethod
     def _resolve_option_chain(candidate: CandidateTrade, entry_context: dict[str, Any]) -> str | None:

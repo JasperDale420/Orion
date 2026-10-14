@@ -198,10 +198,11 @@ def _note_ticker_source_streak(
 ) -> int:
     # Per docs/rca/feature_enrichment_crash_loop.md (2026-04-22), bronze_db
     # is the canonical primary ticker-discovery source; "heber" is now a
-    # fallback. Both are healthy outcomes — only "static_fallback" or an
-    # unknown source indicates real degradation, so reset the streak for
-    # the recognized data-backed sources.
-    if source in ("bronze_db", "heber"):
+    # fallback. Both are healthy outcomes, as is "market_closed_idle" (empty
+    # bronze outside market hours) — only "static_fallback" or an unknown
+    # source indicates real degradation, so reset the streak for the
+    # recognized non-degraded sources.
+    if source in ("bronze_db", "heber", "market_closed_idle"):
         return 0
 
     streak = non_heber_streak + 1
@@ -256,7 +257,7 @@ def _log_ticker_source_transition(source: str, previous_source: str | None, tick
         "source": source,
         "tickers_count": tickers_count,
     }
-    if source == "heber":
+    if source in ("heber", "market_closed_idle"):
         logger.info("Ticker discovery source switched", extra=extra)
     else:
         logger.warning("Ticker discovery source switched away from Heber", extra=extra)
@@ -453,9 +454,14 @@ async def run_feature_loop(shutdown_event: asyncio.Event) -> None:
                     snapshot = regime_detector.detect(
                         ts=now,
                         cum_ret=cum_ret,
-                        realized_vol=0.015,  # Default; could compute from bars
+                        # Hardcoded placeholder, not a measurement -- must
+                        # never be treated as corroborating (or refuting) a
+                        # vix reading. See 2026-08-18 adversarial review.
+                        realized_vol=0.015,
                         vix=vix_data.get("vix"),
                         vix_1d_change=vix_data.get("vix_1d_change"),
+                        vix_source=vix_data.get("vix_source"),
+                        vix_observed_at=vix_data.get("vix_observed_at"),
                         market_tide_net=market_tide_net,
                     )
 

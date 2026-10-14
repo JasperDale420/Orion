@@ -107,7 +107,7 @@ existing guards and add tests for new ones:
 | Module | Guard |
 |---|---|
 | `execution/execution_engine.py` | Options-only check; `ORDER_ID_PREFIX = "orion_"`; routes through Gateway |
-| `execution/risk/risk_manager.py` | Daily loss limit, max positions, Greeks limits, sector concentration, 0DTE winddown, correlation-adjusted sizing |
+| `execution/risk/manager.py` | Daily loss limit, max positions, Greeks limits, sector concentration, 0DTE winddown, correlation-adjusted sizing |
 | `execution/signal_preflight.py` | Schema + freshness gates before execution |
 | `execution/fill_processor.py` | Filters fills by `orion_` prefix |
 | `core/circuit_breaker.py` | Per-strategy + global breakers |

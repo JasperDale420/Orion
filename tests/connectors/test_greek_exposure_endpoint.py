@@ -90,7 +90,7 @@ async def test_fetch_and_store_uses_latest_timeseries_row(monkeypatch: pytest.Mo
     async def _fast_sleep(*_a: Any, **_k: Any) -> None:
         return None
 
-    monkeypatch.setattr(greek_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(base_gw_module.asyncio, "sleep", _fast_sleep)
 
     stored = await connector.fetch_and_store(["SPY"])
 
@@ -112,7 +112,7 @@ async def test_fetch_and_store_zero_on_empty(monkeypatch: pytest.MonkeyPatch) ->
     async def _fast_sleep(*_a: Any, **_k: Any) -> None:
         return None
 
-    monkeypatch.setattr(greek_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(base_gw_module.asyncio, "sleep", _fast_sleep)
 
     stored = await connector.fetch_and_store(["SPY"])
     assert stored == 0

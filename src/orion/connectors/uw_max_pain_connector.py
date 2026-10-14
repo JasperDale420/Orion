@@ -13,6 +13,7 @@ from empire_core.http_client import create_http_client
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.base_gateway import BaseGatewayConnector
+from orion.shared.dataframe_utils import coerce_ticker_column as _coerce_ticker_column
 from orion.shared.dataframe_utils import first_existing_column as _first_existing_column
 from orion.shared.logger import setup_struct_logger
 
@@ -41,69 +42,45 @@ class UWMaxPainConnector(BaseGatewayConnector):
     async def fetch_and_store(self, tickers: list[str]) -> int:
         """Fetch max pain for multiple tickers and store (bounded concurrency)."""
         today = date.today()
-        semaphore = asyncio.Semaphore(3)
 
-        async def _fetch_one(ticker: str) -> int:
-            async with semaphore:
+        async def _process(ticker: str, expiries: Any) -> int:
+            # Get current price from database (more reliable than API)
+            current_price = await self._get_current_price(ticker)
+            count = 0
+
+            for exp_data in expiries:
+                expiry_str = exp_data.get("expiry")
+                max_pain = exp_data.get("max_pain")
+                price = exp_data.get("price") or current_price
+
+                if not expiry_str or max_pain is None:
+                    continue
+
                 try:
-                    data = await asyncio.to_thread(self._fetch_max_pain, ticker)
-                except Exception as e:
-                    logger.warning("max_pain_retry_exhausted", ticker=ticker, error=str(e))
-                    return 0
-                finally:
-                    await asyncio.sleep(0.5)  # Rate limit between requests
+                    expiry = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+                except Exception:
+                    logger.warning("max_pain_expiry_parse_failed", expiry=expiry_str, exc_info=True)
+                    continue
 
-                if not data or "data" not in data:
-                    return 0
+                distance_pct = None
+                if price and float(price) > 0:
+                    distance_pct = ((float(max_pain) - float(price)) / float(price)) * 100
 
-                expiries = data["data"]
-                if not expiries:
-                    return 0
+                record = {
+                    "ticker": ticker,
+                    "expiry": expiry,
+                    "date": today,
+                    "max_pain_strike": float(max_pain),
+                    "current_price": float(price) if price else None,
+                    "distance_to_max_pain_pct": distance_pct,
+                }
 
-                # Get current price from database (more reliable than API)
-                current_price = await self._get_current_price(ticker)
-                count = 0
+                await self._persist_max_pain(record)
+                count += 1
 
-                for exp_data in expiries:
-                    expiry_str = exp_data.get("expiry")
-                    max_pain = exp_data.get("max_pain")
-                    price = exp_data.get("price") or current_price
+            return count
 
-                    if not expiry_str or max_pain is None:
-                        continue
-
-                    try:
-                        expiry = datetime.strptime(expiry_str, "%Y-%m-%d").date()
-                    except Exception:
-                        logger.warning("max_pain_expiry_parse_failed", expiry=expiry_str, exc_info=True)
-                        continue
-
-                    distance_pct = None
-                    if price and float(price) > 0:
-                        distance_pct = ((float(max_pain) - float(price)) / float(price)) * 100
-
-                    record = {
-                        "ticker": ticker,
-                        "expiry": expiry,
-                        "date": today,
-                        "max_pain_strike": float(max_pain),
-                        "current_price": float(price) if price else None,
-                        "distance_to_max_pain_pct": distance_pct,
-                    }
-
-                    await self._persist_max_pain(record)
-                    count += 1
-
-                return count
-
-        results = await asyncio.gather(*[_fetch_one(t) for t in tickers], return_exceptions=True)
-        stored = 0
-        for i, r in enumerate(results):
-            if isinstance(r, Exception):
-                logger.error("max_pain_ticker_failed", ticker=tickers[i], error=str(r))
-            else:
-                stored += r
-        return stored
+        return await self._fetch_many_bounded(tickers, self._fetch_max_pain, _process, label="max_pain", log=logger)
 
     async def _get_current_price(self, ticker: str) -> float | None:
         """Get latest price from Heber bars."""
@@ -148,13 +125,3 @@ class UWMaxPainConnector(BaseGatewayConnector):
         """Persist latest max pain rows in memory."""
         self._latest_max_pain_rows.append(dict(record))
         self._latest_max_pain_rows = self._trim_buffer(self._latest_max_pain_rows)
-
-
-def _coerce_ticker_column(df: pd.DataFrame) -> pd.DataFrame:
-    if "ticker" in df.columns:
-        return df
-    if "symbol" in df.columns:
-        return df.assign(ticker=df["symbol"].astype(str).str.upper())
-    if "instrument_key" in df.columns:
-        return df.assign(ticker=df["instrument_key"].astype(str).str.split(":").str[-1].str.upper())
-    return df

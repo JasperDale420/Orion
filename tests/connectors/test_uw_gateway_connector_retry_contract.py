@@ -142,7 +142,11 @@ async def test_fetch_and_store_handles_retry_exhaustion_gracefully(
     async def _fail_to_thread(*_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("gateway temporarily unavailable")
 
-    monkeypatch.setattr(module.asyncio, "to_thread", _fail_to_thread)
+    # asyncio.to_thread is invoked either directly by the connector module (market
+    # tide) or by the shared BaseGatewayConnector._fetch_many_bounded helper (the
+    # other three); asyncio is a process-wide singleton module, so patching it via
+    # base_gw_module affects both call sites identically.
+    monkeypatch.setattr(base_gw_module.asyncio, "to_thread", _fail_to_thread)
 
     stored = await connector.fetch_and_store(*call_args)
     assert stored == 0
@@ -204,7 +208,7 @@ async def test_greek_exposure_fetch_and_store_avoids_local_db_write(monkeypatch:
     async def _fast_sleep(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(greek_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(base_gw_module.asyncio, "sleep", _fast_sleep)
 
     stored = await connector.fetch_and_store(["AAPL"])
 
@@ -237,7 +241,7 @@ async def test_iv_rank_fetch_and_store_avoids_local_db_write(monkeypatch: pytest
     async def _fast_sleep(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    monkeypatch.setattr(iv_module.asyncio, "sleep", _fast_sleep)
+    monkeypatch.setattr(base_gw_module.asyncio, "sleep", _fast_sleep)
 
     stored = await connector.fetch_and_store(["AAPL"])
 

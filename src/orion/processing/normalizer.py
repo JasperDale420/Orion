@@ -59,22 +59,32 @@ class NormalizationEngine:
         """
         PRD 6.2 Silver Schema: UW Options Flow
         """
-        # Parse timestamp — three known sources of UW flow data, three
-        # different field names:
-        #   - Data-Gateway UW stream → "timestamp"
+        # Parse the print time — the known sources of UW flow data each use
+        # a different field name:
+        #   - Data-Gateway UW stream / push → "timestamp"
         #   - Legacy UW push → "created_at"
-        #   - Heber Silver `feed=flow_alerts` rows (current default since
-        #     the gateway-to-Heber migration) → "flow_ts_utc"
-        # Without the `flow_ts_utc` branch, every Heber-sourced flow event
-        # fell through `payload.get(...) or payload.get(...)` to None, and
-        # `parse_timestamptz(None, strict=True)` silently returned now()
-        # (strict only catches parse exceptions, not None input). Net
-        # effect: silver UW_FLOW signals were timestamped at ingestion
-        # time instead of event time, breaking the bar/flow time-
-        # correlation that downstream feature engineering and rule
-        # firing depend on. Found 2026-05-21 during the end-to-end
-        # pipeline health check.
-        ts_str = payload.get("timestamp") or payload.get("created_at") or payload.get("flow_ts_utc")
+        #   - Heber Silver `feed=flow_alerts` rows (the poll path,
+        #     `_heber_row_to_event`) → "ts_event" — the ONLY event-time
+        #     column in that parquet schema (alongside ts_ingest /
+        #     ts_available); it reaches here as an ISO string.
+        #   - Orion's own Silver column name / re-normalized payloads →
+        #     "flow_ts_utc"
+        # `parse_timestamptz(None, strict=True)` returns now() (strict only
+        # catches parse exceptions, not None input), so a missed field name
+        # silently stamps the normalization wall-clock instead of the print
+        # time. Downstream `_signal_age_seconds` prefers this `flow_ts_utc`
+        # over the silver row's `signal_ts_utc`, so a now() stamp makes the
+        # per-bucket signal-age gate see ~0s for a print that is really
+        # minutes old and mint born-stale candidates that preflight then
+        # rejects as "Data Lag" (verified 2026-08-16 against bronze_events:
+        # heber_flow rows had flow_ts_utc ~= received_ts_utc, +294s vs
+        # event_ts_utc; push rows were exact).
+        ts_str = (
+            payload.get("timestamp")
+            or payload.get("created_at")
+            or payload.get("ts_event")
+            or payload.get("flow_ts_utc")
+        )
         flow_ts = parse_timestamptz(ts_str, strict=True)
 
         # Normalize sweep flag - support is_sweep (Heber Silver), has_sweep (Data-Gateway), sweep (legacy).

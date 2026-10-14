@@ -25,6 +25,7 @@ from sklearn.model_selection import train_test_split
 
 from orion.clients.heber_reader import get_heber_reader
 from orion.config import system_settings
+from orion.ml.model_loading import load_compatible_pickle
 from orion.shared.logger import setup_struct_logger
 
 logger = setup_struct_logger("orion.ml.exit_classifier")
@@ -575,8 +576,7 @@ class BucketExitClassifier:
             model_path = MODEL_DIR / f"{bucket}_exit.pkl"
             if model_path.exists():
                 try:
-                    with open(model_path, "rb") as f:
-                        model_data = pickle.load(f)
+                    model_data = load_compatible_pickle(model_path)
                     self.models[bucket] = model_data
                     self.feature_names[bucket] = model_data.get("feature_names", [])
                     loaded_count += 1

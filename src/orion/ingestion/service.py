@@ -15,7 +15,12 @@ from orion.config import system_settings
 from orion.clients.heber_reader import get_heber_reader
 from orion.connectors.gateway_stream_client import create_gateway_stream_client
 from orion.core.health_monitor import CriticalHealthError, HealthMonitor
-from orion.core.service_lease import SERVICE_LEASE_STALE_SECONDS, acquire_service_lease, renew_service_lease
+from orion.core.service_lease import (
+    SERVICE_LEASE_STALE_SECONDS,
+    ServiceLeaseLostError,
+    acquire_service_lease,
+    renew_service_lease,
+)
 from orion.core.timekeeping import (
     closed_sessions_between,
     derive_trading_date_and_session,
@@ -188,13 +193,12 @@ class IngestionService:
         await init_db()
         self._lease_run_id = await acquire_service_lease("ingestion")
 
-        if system_settings.reset_circuit_breaker_on_start:
-            try:
-                from orion.core.circuit_breaker import CircuitBreaker
-
-                await CircuitBreaker().close()
-            except Exception as cb_err:
-                logger.error(f"Failed to reset circuit breaker on start: {cb_err}", exc_info=True)
+        # Startup deliberately does NOT touch the global circuit breaker. It
+        # latches so that a human looks at whatever tripped it, and a restart is
+        # not a human looking at it — auto-closing here would have re-armed
+        # order flow after a drawdown kill switch or a manual halt. The startup
+        # false positive that motivated the old escape hatch is fixed at source
+        # in `run()`, where the heartbeat clock now starts.
 
         # required=True: a startup hydrate failure must NOT silently fall through
         # to a static-watchlist-only session (2026-06-01 near-outage). Fail loud
@@ -256,6 +260,18 @@ class IngestionService:
         await self.initialize()
         self._handle_shutdown_signals()
 
+        # Start the heartbeat clock HERE, on loop entry. HealthMonitor stamps it
+        # at construction, which is before `initialize()` spends several minutes
+        # hydrating the universe and the feature-engine history — so the first
+        # `check_health()` measured startup as a liveness gap and tripped the
+        # global circuit breaker, which has no auto-reset and latched (2026-08-13:
+        # "Heartbeat missing for 425.76s > 60.0s", 21h of blocked order flow).
+        # The gap must be measured from when the loop began, not when the object
+        # was built. The market-closed path reaches `check_health()` via
+        # `_check_overnight_sleep -> _maybe_run_eod` before `_run_cycle` bumps
+        # the heartbeat itself, so this cannot be deferred into the cycle.
+        self.health_monitor.update_heartbeat()
+
         logger.info("Starting Polling Loop. Interval: 60s")
         loop_interval = 60.0
 
@@ -264,6 +280,13 @@ class IngestionService:
             try:
                 await self._run_cycle()
                 self._log_cycle_latency(asyncio.get_running_loop().time() - start_time)
+            except ServiceLeaseLostError:
+                # Another live instance owns our lease (the sleep loop renews
+                # from inside _run_cycle). Stop being a second writer: exit
+                # non-zero so launchd relaunches, and the relaunch re-acquires
+                # only if the lease is genuinely free.
+                self.shutdown_event.set()
+                raise
             except BaseException as e:
                 # Catch BaseException (not just Exception) so SystemExit /
                 # CancelledError from a misbehaving background task can't
@@ -291,6 +314,9 @@ class IngestionService:
 
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(self.shutdown_event.wait(), timeout=sleep_time)
+            except ServiceLeaseLostError:
+                self.shutdown_event.set()
+                raise
             except Exception as e:
                 logger.error(f"Heartbeat/sleep tail error: {type(e).__name__}: {e}", exc_info=True)
                 await asyncio.sleep(5.0)
@@ -326,10 +352,17 @@ class IngestionService:
         which swallows transient DB errors so a blip here can't crash
         the ingestion loop. Repeated failures naturally let the lease
         go stale so another process can legitimately take over.
+
+        Fences on confirmed loss: if the row is held by another live
+        instance, this raises `ServiceLeaseLostError` rather than logging
+        and carrying on. Ingestion is a writer — bronze/silver, EOD
+        reconcile and sweep — so a displaced instance that keeps running
+        races the winner on the same tables (2026-06-08: a leftover docker
+        container thrashed the lease across 345 restarts).
         """
         if self._lease_run_id is None:
             return
-        await renew_service_lease("ingestion", self._lease_run_id)
+        await renew_service_lease("ingestion", self._lease_run_id, fence_on_confirmed_loss=True)
 
     async def _run_cycle(self) -> None:
         await self._check_overnight_sleep()
@@ -553,6 +586,11 @@ class IngestionService:
                 # 60s sleep chunk keeps the DB row well within
                 # ingestion_heartbeat_max_age.
                 await self._update_health_status()
+                # The single-instance lease has the same problem: `run()` only
+                # renews it after `_run_cycle` returns, which never happens
+                # while this loop is parked over a weekend. A lease older than
+                # SERVICE_LEASE_STALE_SECONDS lets a second instance take over.
+                await self._maybe_renew_lease()
                 # Re-checked each chunk so the settlement grace period elapsing
                 # mid-sleep still triggers, and so a failed run retries within
                 # the same night (bounded by EOD_RETRY_INTERVAL_SECONDS).
@@ -918,7 +956,7 @@ class IngestionService:
                 str(payload.get(k, ""))
                 for k in ("ticker", "ts_event", "executed_at", "premium", "put_call", "strike", "expiry", "volume")
             )
-            event_id = f"uwflow_{hashlib.sha1(basis.encode()).hexdigest()}"
+            event_id = f"uwflow_{hashlib.sha1(basis.encode(), usedforsecurity=False).hexdigest()}"
 
         # Extract event timestamp before it was converted to ISO string
         ts_event_raw = raw.get("ts_event")
@@ -1168,9 +1206,16 @@ class IngestionService:
         session as complete on True, so a failure is retried rather than lost.
         """
         try:
-            from orion.execution.persistence import realize_expired_journal_rows
+            from orion.execution.persistence import (
+                realize_expired_journal_rows,
+                reconcile_journal_exits_from_fills,
+            )
             from orion.jobs.reconcile_pnl import STATUS_BROKER_UNAVAILABLE, run_reconciliation
 
+            # Attribute any recorded sell fill the live path missed BEFORE the
+            # expiry sweep, so a lot that was actually sold is never booked as
+            # expired-worthless (2026-08-13: 25 sold July lots swept at -100%).
+            await reconcile_journal_exits_from_fills()
             await realize_expired_journal_rows()
             result = await run_reconciliation(trading_date)
         except Exception as e:
@@ -1208,7 +1253,7 @@ class IngestionService:
         return True
 
     async def _post_flow_parity_summary(self) -> None:
-        """Aggregate the day's flow_push_parity rows and post a Discord summary.
+        """Aggregate daily flow-push parity; log GREEN and page only RED.
 
         Reports total push vs poll counts, total missed-by-push (the cutover
         gate, excluding the uwflow_* unmatchable class), median latency
@@ -1245,14 +1290,16 @@ class IngestionService:
             verdict = "GREEN" if green else "RED"
             latency_str = f"{latency_avg:.1f}s" if latency_avg is not None else "n/a"
 
-            await send_discord_alert(
+            summary = (
                 f"Flow-push shadow parity ({verdict}) — cycles={cycles}, "
                 f"push={int(push_total)}, poll={int(poll_total)}, "
                 f"missed_by_push={true_missed} (unmatchable={int(unmatchable_total)}), "
                 f"median_latency_improvement={latency_str}, "
-                f"reconcile_window={int(window_s or 0)}s",
-                dedupe_key="flow_push_parity_daily",
+                f"reconcile_window={int(window_s or 0)}s"
             )
+            logger.info("flow_push_parity_summary", verdict=verdict, summary=summary)
+            if not green:
+                await send_discord_alert(summary, dedupe_key="flow_push_parity_daily")
         except Exception as e:
             logger.error(f"flow_push_parity summary failed: {e}", exc_info=True)
 

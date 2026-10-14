@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
-from sqlalchemy import DateTime, Float, Integer, String
+from sqlalchemy import Date, DateTime, Float, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from orion.storage.db import Base
@@ -38,6 +38,13 @@ class RiskState(Base):
     # RiskManager writes the current version on every save and refuses order
     # admission for a row that does not carry it.
     accounting_version: Mapped[int | None] = mapped_column(Integer, default=None)
+
+    # America/New_York calendar date that `current_daily_loss` belongs to. The
+    # daily-loss limit is a per-session control: RiskManager discards the figure
+    # on load and before any read when this date is not the current trading
+    # date. NULL means the row predates the column — the figure has no day
+    # identity and is treated as belonging to an earlier session.
+    daily_loss_date: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
 
 
 class ProcessedFill(Base):

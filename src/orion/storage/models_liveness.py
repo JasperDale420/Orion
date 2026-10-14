@@ -44,5 +44,8 @@ class ServiceLiveness(Base):
     # budget is an alert.
     cadence_budget_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    # Row-update timestamp (server-maintained).
+    # Row-update timestamp. Set by the application clock at publish time
+    # (publish_liveness), not by the database server — advances on BOTH a
+    # successful publish and an error-only publish, which the dead-man
+    # watchdog's retired-service reactivation check relies on.
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

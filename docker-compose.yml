@@ -176,11 +176,12 @@ services:
       ORION_LEASE_OWNER_ID: ${ORION_LEASE_OWNER_ID:-orion_execution_compose}
       ORION_REQUIRE_ROLLUPS_FOR_SIGNALS_LIVE: "false"
       ORION_RISK_MAX_DAILY_LOSS: ${ORION_RISK_MAX_DAILY_LOSS:-2000}
-      # Forward-testing knobs — disable both circuit breakers and lower the
+      # Forward-testing knobs — disable the broker-error breaker and lower the
       # ML prefilter threshold so we can see end-to-end pipeline behavior.
-      # Override per env at deploy time once we want strict guards back.
+      # Override per env at deploy time once we want strict guards back. The
+      # global breaker (drawdown kill switch / operator halt) has no disable
+      # switch: an OPEN row always halts new entries.
       ORION_CIRCUIT_BREAKER_ENABLED: ${ORION_CIRCUIT_BREAKER_ENABLED:-false}
-      ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED: ${ORION_GLOBAL_CIRCUIT_BREAKER_ENABLED:-false}
       ORION_ML_PREFILTER_THRESHOLD: ${ORION_ML_PREFILTER_THRESHOLD:-0.05}
       GATEWAY_URL: http://data-gateway:8080
       GATEWAY_API_KEY: ${DATA_GATEWAY_API_KEY:-${GATEWAY_API_KEY:-}}

@@ -97,6 +97,12 @@ class RegimeSnapshot(Base):
     session_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
     vix_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
     vix_level: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Provenance of vix_level (e.g. "proxy:VIXY" vs a trusted "spot_vix") and
+    # the underlying observation's own timestamp — see
+    # orion.analysis.regime.is_trusted_vix_source. NULL on rows written
+    # before this column existed; treated as untrusted/stale by RegimeGate.
+    vix_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    vix_observed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     realized_vol: Mapped[float | None] = mapped_column(Float, nullable=True)
     trend_strength: Mapped[float | None] = mapped_column(Float, nullable=True)
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)

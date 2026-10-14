@@ -5,7 +5,10 @@ Each stage is tested in isolation to verify it correctly returns CONTINUE or SKI
 and populates PipelineContext fields for downstream stages.
 """
 
-from datetime import UTC, datetime
+import asyncio
+import itertools
+import logging
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,7 +18,37 @@ from orion.processing.pipeline import PipelineContext, StageResult
 from orion.processing.stages.ml_prefilter import MLPreFilter
 from orion.processing.stages.regime_gate import RegimeGate
 from orion.processing.stages.solver_ensemble import SolverEnsemble
+from orion.storage.db import async_session_factory
+from orion.storage.models import RegimeSnapshot
 from orion.storage.models_gold import CandidateTrade
+
+_regime_snapshot_id_seq = itertools.count(1)
+
+
+async def _insert_regime_snapshot(
+    *,
+    ts_utc: datetime,
+    vix_level: float | None,
+    ticker: str = "SPY",
+    vix_source: str | None = None,
+    vix_observed_at: datetime | None = None,
+) -> None:
+    # SQLite's rowid-alias autoincrement only kicks in for an `Integer` primary
+    # key column; the model declares `BigInteger`, so the in-memory test DB
+    # needs an explicit id (Postgres autoincrements this fine in prod).
+    async with async_session_factory() as session:
+        session.add(
+            RegimeSnapshot(
+                id=next(_regime_snapshot_id_seq),
+                ts_utc=ts_utc,
+                ticker=ticker,
+                vix_level=vix_level,
+                vix_source=vix_source,
+                vix_observed_at=vix_observed_at,
+                realized_vol=None,
+            )
+        )
+        await session.commit()
 
 
 def _make_candidate(**overrides) -> CandidateTrade:
@@ -62,7 +95,7 @@ async def test_regime_gate_continues_in_normal_conditions():
 async def test_regime_gate_skips_on_shock():
     gate = RegimeGate()
 
-    # SHOCK should trigger SKIP
+    # SHOCK backed by a trusted spot-VIX source should trigger SKIP
     snapshot = MarketRegimeSnapshot(
         ts=datetime.now(UTC),
         trend=TrendRegime.FLAT,
@@ -70,6 +103,7 @@ async def test_regime_gate_skips_on_shock():
         risk=RiskRegime.RISK_OFF,
         session=SessionRegime.MIDDAY,
         vix_regime=VIXRegime.EXTREME,
+        vix_source="spot_vix",
     )
     gate.multi_axis_detector.detect = MagicMock(return_value=snapshot)
 
@@ -79,6 +113,32 @@ async def test_regime_gate_skips_on_shock():
     assert result.action == "SKIP"
     assert "SHOCK" in result.reason
     assert result.trace.get("regime_blocked") is True
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_continues_on_untrusted_proxy_shock():
+    """A SHOCK classification driven by an unverified vix source (the VIXY
+    ETF-price proxy, or no source tagged at all) must not hard-block —
+    2026-08-18 adversarial review found the proxy formula is not a valid
+    spot-VIX estimator and was hard-blocking all trading off it."""
+    gate = RegimeGate()
+
+    snapshot = MarketRegimeSnapshot(
+        ts=datetime.now(UTC),
+        trend=TrendRegime.FLAT,
+        vol=VolRegime.SHOCK,
+        risk=RiskRegime.NEUTRAL,
+        session=SessionRegime.MIDDAY,
+        vix_regime=VIXRegime.EXTREME,
+        vix_source="proxy:VIXY",
+    )
+    gate.multi_axis_detector.detect = MagicMock(return_value=snapshot)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert ctx.regime_size_multiplier > 0
 
 
 @pytest.mark.asyncio
@@ -103,6 +163,343 @@ async def test_regime_gate_populates_context():
     assert ctx.regime_snapshot.vol == VolRegime.LOW
     # Size multiplier should reflect favorable conditions
     assert ctx.regime_size_multiplier > 0
+
+
+# --- RegimeGate: honest regime inputs (audit fix — detect() was called with
+# no market data, so the documented SHOCK/extreme-VIX block could never fire) ---
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_uses_fresh_trusted_snapshot_to_detect_real_shock():
+    """A fresh regime_snapshots row backed by a trusted spot-VIX source must
+    feed detect() and trigger the SHOCK block — proving the gate is no
+    longer blind to real market data when a trustworthy reading exists."""
+    gate = RegimeGate()  # real detector, not mocked — exercise the actual wiring
+
+    now = datetime.now(UTC)
+    await _insert_regime_snapshot(ts_utc=now, vix_level=40.0, vix_source="spot_vix", vix_observed_at=now)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "SKIP"
+    assert "SHOCK" in result.reason
+    assert result.trace.get("regime_inputs") == "regime_snapshots"
+    assert ctx.regime_snapshot.vol == VolRegime.SHOCK
+    # 2026-08-18 adversarial review (gpt-5.6-terra, round 2): the underlying
+    # observation's own timestamp must reach the decision snapshot too, not
+    # just the DB row — otherwise the evidence for *why* this was trusted is
+    # lost from the in-flight snapshot and decision trace.
+    assert ctx.regime_snapshot.vix_observed_at == now
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_does_not_block_on_fresh_untrusted_proxy_snapshot():
+    """2026-08-18 adversarial review (gpt-5.6-terra): a fresh regime_snapshots
+    row whose vix_level came from the VIXY-ETF-price proxy (or carries no
+    source tag) must still classify as SHOCK for visibility, but must NOT
+    hard-block trading — that proxy is not a validated spot-VIX estimator."""
+    gate = RegimeGate()
+
+    now = datetime.now(UTC)
+    await _insert_regime_snapshot(ts_utc=now, vix_level=40.0, vix_source="proxy:VIXY", vix_observed_at=now)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "regime_snapshots"
+    assert ctx.regime_snapshot.vol == VolRegime.SHOCK
+    assert ctx.regime_size_multiplier > 0
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_ignores_vix_with_stale_underlying_observation():
+    """A regime_snapshots row can be rewritten every ~5 minutes (so ts_utc
+    always looks fresh) while replaying the same stale VIXY close, e.g. over
+    a weekend or feed outage. The row's own write time must not be trusted
+    as a proxy for how current the underlying vix observation is."""
+    gate = RegimeGate()
+
+    now = datetime.now(UTC)
+    stale_observation = now - timedelta(minutes=45)
+    await _insert_regime_snapshot(ts_utc=now, vix_level=40.0, vix_source="spot_vix", vix_observed_at=stale_observation)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_treats_missing_observed_at_as_stale():
+    """A vix_level with no vix_observed_at at all (e.g. a row written before
+    this column existed) must not be trusted as fresh just because it has a
+    source tag and a recent write time."""
+    gate = RegimeGate()
+
+    await _insert_regime_snapshot(ts_utc=datetime.now(UTC), vix_level=40.0, vix_source="spot_vix", vix_observed_at=None)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_alerts_once_on_proxy_would_block(caplog):
+    """An untrusted-source SHOCK reading that would have blocked trading if
+    it were trusted must raise an operator-visible alert — silently sizing
+    around it is not enough when the underlying signal may be a real shock
+    the system currently has no trusted way to confirm."""
+    gate = RegimeGate()
+
+    now = datetime.now(UTC)
+    await _insert_regime_snapshot(ts_utc=now, vix_level=40.0, vix_source="proxy:VIXY", vix_observed_at=now)
+
+    with caplog.at_level(logging.CRITICAL):
+        for _ in range(3):
+            ctx = PipelineContext(candidate=_make_candidate())
+            await gate.evaluate(ctx)
+
+    alerts = [r for r in caplog.records if "proxy_would_block" in r.getMessage()]
+    assert len(alerts) == 1
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_proxy_alert_rearms_after_clearing(caplog):
+    """The proxy_would_block latch must not stay permanently tripped once
+    set — after the condition clears, a later recurrence must alert again
+    rather than staying silently suppressed forever."""
+    gate = RegimeGate()
+
+    await _insert_regime_snapshot(
+        ts_utc=datetime.now(UTC), vix_level=40.0, vix_source="proxy:VIXY", vix_observed_at=datetime.now(UTC)
+    )
+
+    with caplog.at_level(logging.CRITICAL):
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+
+        # Force a fresh DB read past the 60s cache instead of waiting it out,
+        # then clear the condition with a non-SHOCK reading.
+        gate._cache_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await _insert_regime_snapshot(
+            ts_utc=datetime.now(UTC), vix_level=10.0, vix_source="proxy:VIXY", vix_observed_at=datetime.now(UTC)
+        )
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+
+        # Recur: SHOCK from an untrusted source again.
+        gate._cache_expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await _insert_regime_snapshot(
+            ts_utc=datetime.now(UTC), vix_level=40.0, vix_source="proxy:VIXY", vix_observed_at=datetime.now(UTC)
+        )
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+
+    alerts = [r for r in caplog.records if "proxy_would_block" in r.getMessage()]
+    assert len(alerts) == 2
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_cache_never_outlives_vix_observation_freshness_deadline():
+    """2026-08-18 adversarial review (round 2): the 60s read-cache capped
+    expiry at the row's own write-time deadline only. A vix reading whose
+    underlying observation is already 14m59s old must not still be trusted
+    61 seconds later just because the row's write time has headroom."""
+    gate = RegimeGate()
+
+    now = datetime.now(UTC)
+    almost_stale_observation = now - timedelta(minutes=15) + timedelta(seconds=5)
+    await _insert_regime_snapshot(
+        ts_utc=now, vix_level=40.0, vix_source="spot_vix", vix_observed_at=almost_stale_observation
+    )
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.trace.get("regime_inputs") == "regime_snapshots"
+    assert result.action == "SKIP"
+
+    vix_deadline = almost_stale_observation + timedelta(minutes=15)
+    assert gate._cache_expires_at is not None
+    assert gate._cache_expires_at <= vix_deadline + timedelta(seconds=1)
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_ignores_stale_snapshot():
+    """A regime_snapshots row older than the documented freshness window must
+    NOT be treated as real-time data — a stale extreme VIX reading (last
+    written 30 minutes ago) must not silently drive today's decisions."""
+    gate = RegimeGate()
+
+    stale_ts = datetime.now(UTC) - timedelta(minutes=30)
+    await _insert_regime_snapshot(ts_utc=stale_ts, vix_level=40.0)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_no_snapshot_reports_none_and_does_not_block():
+    """No regime_snapshots row at all (fresh DB / no feature_enrichment writes
+    yet) must fail toward not blocking, and the trace must say so honestly
+    rather than implying real inputs were used."""
+    gate = RegimeGate()
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_fresh_snapshot_with_null_vix_reports_none():
+    """A fresh row that carries no vix_level (today's reality: feature_enrichment's
+    upstream VIX read is disabled in prod) must not be reported as a real
+    input just because the row itself is recent."""
+    gate = RegimeGate()
+
+    await _insert_regime_snapshot(ts_utc=datetime.now(UTC), vix_level=None)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_db_read_failure_falls_back_to_no_block(monkeypatch):
+    """A DB error while reading regime_snapshots must never crash the pipeline
+    or block trading — it must degrade to the same behavior as no source."""
+    gate = RegimeGate()
+
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("orion.processing.stages.regime_gate.async_session_factory", _raise)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_logs_inert_warning_exactly_once(caplog):
+    """When no real input is available, the gate must warn once (not spam
+    the logs once per candidate) so an operator can discover it — but the
+    per-decision trace still reports `regime_inputs: none` every time."""
+    gate = RegimeGate()
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            ctx = PipelineContext(candidate=_make_candidate())
+            await gate.evaluate(ctx)
+
+    # regime_gate's logger is structlog-based (setup_struct_logger), which
+    # JSON-renders the event into LogRecord.msg before stdlib logging ever
+    # sees it — so the event name is a substring of the rendered record,
+    # not an exact match (unlike a plain logging.getLogger() call).
+    inert_warnings = [r for r in caplog.records if "regime_gate_inert_no_inputs" in r.getMessage()]
+    assert len(inert_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_rejects_future_dated_snapshot():
+    """Codex adversarial review (high): a future-dated row (clock skew, bad
+    data) has a NEGATIVE age, which must not satisfy `age <= freshness` and
+    be treated as fresh forever until real time catches up to it — that
+    would let one bad row latch a SHOCK block indefinitely."""
+    gate = RegimeGate()
+
+    future_ts = datetime.now(UTC) + timedelta(minutes=10)
+    await _insert_regime_snapshot(ts_utc=future_ts, vix_level=40.0)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_db_read_timeout_falls_back_to_no_block(monkeypatch):
+    """Codex adversarial review (high): main_execution awaits
+    SignalEngine.decide() sequentially per candidate, so a hung DB read
+    inside the gate would stall the whole pipeline rather than degrading —
+    the read must be wrapped in a hard timeout, same idiom as
+    shared/liveness.py's publish call."""
+    gate = RegimeGate()
+    monkeypatch.setattr("orion.processing.stages.regime_gate.REGIME_INPUT_DB_TIMEOUT_SECONDS", 0.05)
+
+    async def _hang():
+        await asyncio.sleep(5)
+        return None
+
+    monkeypatch.setattr(gate, "_read_latest_snapshot", _hang)
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await asyncio.wait_for(gate.evaluate(ctx), timeout=2.0)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("regime_inputs") == "none"
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_cache_never_outlives_row_freshness_deadline():
+    """Codex adversarial review (medium): the 60s read-cache must not keep
+    returning a row's real vix past that row's own 15-minute freshness
+    deadline — a row read at 14:59 old must not still be "fresh" 61 seconds
+    later. The cache expiry is capped at the row's own deadline, not just
+    now + 60s."""
+    gate = RegimeGate()
+
+    almost_stale_ts = datetime.now(UTC) - timedelta(minutes=15) + timedelta(seconds=5)
+    await _insert_regime_snapshot(
+        ts_utc=almost_stale_ts, vix_level=40.0, vix_source="spot_vix", vix_observed_at=almost_stale_ts
+    )
+
+    ctx = PipelineContext(candidate=_make_candidate())
+    result = await gate.evaluate(ctx)
+
+    assert result.trace.get("regime_inputs") == "regime_snapshots"
+    assert result.action == "SKIP"
+
+    # The cache must expire at (row_ts + 15min), not (now + 60s) — the row
+    # deadline arrives in ~5s, well before the 60s TTL would.
+    row_deadline = almost_stale_ts + timedelta(minutes=15)
+    assert gate._cache_expires_at is not None
+    assert gate._cache_expires_at <= row_deadline + timedelta(seconds=1)
+
+
+@pytest.mark.asyncio
+async def test_regime_gate_caches_db_read_within_ttl():
+    """The bounded read must be cached (<=60s) so a hot pipeline evaluating
+    many candidates per minute doesn't hammer TimescaleDB once per candidate
+    for a value that only changes every 5 minutes."""
+    gate = RegimeGate()
+    await _insert_regime_snapshot(ts_utc=datetime.now(UTC), vix_level=40.0)
+
+    calls = 0
+    real_factory = async_session_factory
+
+    def _counting_factory():
+        nonlocal calls
+        calls += 1
+        return real_factory()
+
+    with patch("orion.processing.stages.regime_gate.async_session_factory", side_effect=_counting_factory):
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+        await gate.evaluate(PipelineContext(candidate=_make_candidate()))
+
+    assert calls == 1
 
 
 # --- MLPreFilter ---
@@ -186,6 +583,209 @@ async def test_ml_prefilter_continues_on_scorer_error():
 
     assert result.action == "CONTINUE"
     assert "error" in str(result.trace)
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_trace_reports_model_scoring_mode():
+    """When the candidate's bucket has a trained model, the trace must say
+    so explicitly — ``strategy_decisions.decision_trace_json`` needs to
+    distinguish a real model score from the heuristic fallback, not just
+    carry a bare number."""
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False
+    mock_scorer.last_scoring_mode = "model"
+    mock_scorer.score_enriched = AsyncMock(return_value=0.8)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("scoring_mode") == "model"
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_trace_reports_heuristic_scoring_mode():
+    """When no trained model loaded, the trace must say ``heuristic`` — this
+    is the state that went invisible after PR #187 promoted sklearn's
+    InconsistentVersionWarning to a load failure, silently switching every
+    candidate onto the heuristic scorer with no signal in the decision trace."""
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = True
+    mock_scorer.last_scoring_mode = "heuristic"
+    mock_scorer.score_enriched = AsyncMock(return_value=0.5)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("scoring_mode") == "heuristic"
+    assert result.trace.get("threshold") == 0.40  # HEURISTIC_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_skip_trace_also_reports_scoring_mode():
+    """The SKIP branch's trace needs ``scoring_mode`` too — a rejected
+    candidate is exactly the case an operator most wants to audit."""
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = True
+    mock_scorer.last_scoring_mode = "heuristic"
+    mock_scorer.score_enriched = AsyncMock(return_value=0.1)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "SKIP"
+    assert result.trace.get("scoring_mode") == "heuristic"
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_trace_reads_scorer_last_scoring_mode_not_global_use_heuristic():
+    """Regression: models are bucket-specific and inference can fail per
+    call, so a global ``use_heuristic is False`` (SOME bucket has a model,
+    and no exception this run) does not mean THIS candidate was scored by a
+    model. The trace must come from the scorer's actual per-call outcome
+    (``last_scoring_mode``, set by score()/score_enriched() as its last
+    step), not the global flag — using the flag here previously mislabeled
+    a heuristically-scored candidate as ``model``."""
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False  # some OTHER bucket (e.g. SWING) has a model
+    mock_scorer.last_scoring_mode = "heuristic"  # but THIS call fell back (bucket gap or exception)
+    mock_scorer.score_enriched = AsyncMock(return_value=0.6)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.trace.get("scoring_mode") == "heuristic"
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_applies_heuristic_threshold_to_heuristic_score_under_partial_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial bucket coverage: only SWING has a trained model, so the global
+    ``use_heuristic`` flag reads False, but a SHORT_SWING candidate is still
+    scored by the heuristic fallback. A heuristic score must be compared
+    against the heuristic threshold (0.40), not the model-calibrated one —
+    0.45 clears 0.40 and fails 0.5, so the two thresholds are distinguishable.
+    """
+    monkeypatch.setattr(
+        "orion.processing.stages.ml_prefilter.system_settings.ml_prefilter_threshold", 0.5, raising=False
+    )
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False  # SWING has a model, so the global flag says "model"
+    mock_scorer.last_scoring_mode = "heuristic"  # ...but THIS candidate's bucket has none
+    mock_scorer.score_enriched = AsyncMock(return_value=0.45)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "CONTINUE"
+    assert result.trace.get("threshold") == 0.40
+
+
+@pytest.mark.asyncio
+async def test_ml_prefilter_keeps_model_threshold_for_model_scored_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The converse guard: a genuine model score is still held to the
+    configured (stricter) threshold — the heuristic threshold must not leak
+    onto model-scored candidates and loosen admission."""
+    monkeypatch.setattr(
+        "orion.processing.stages.ml_prefilter.system_settings.ml_prefilter_threshold", 0.5, raising=False
+    )
+    stage = MLPreFilter()
+
+    mock_scorer = MagicMock()
+    mock_scorer.bypass_scoring = False
+    mock_scorer.use_heuristic = False
+    mock_scorer.last_scoring_mode = "model"
+    mock_scorer.score_enriched = AsyncMock(return_value=0.45)
+
+    ctx = PipelineContext(
+        candidate=_make_candidate(
+            option_type="CALL",
+            premium=2.0,
+            evidence={"premium_usd": 100000, "put_call": "C"},
+        )
+    )
+
+    with patch("orion.ml.scorer.get_scorer", return_value=mock_scorer):
+        result = await stage.evaluate(ctx)
+
+    assert result.action == "SKIP"
+    assert result.trace.get("threshold") == 0.5
+
+
+def test_build_payload_dte_uses_calendar_days_not_wall_clock_hours():
+    """DTE must be calendar-day arithmetic — ``expiration_date.date() -
+    timestamp_utc.date()`` — matching ``count_open_journal_positions`` in
+    ``orion/execution/persistence.py``. The old raw-datetime subtraction
+    truncated a same-evening entry expiring at next midnight to 0 days
+    (dte=0 → bucket 0DTE) even though it's a genuine 1-DTE SHORT_SWING: a
+    Thursday 13:41 UTC candidate expiring Friday 00:00 UTC is 1 calendar
+    day out, not 0."""
+    ts = datetime(2026, 8, 13, 13, 41, tzinfo=UTC)
+    expiry = datetime(2026, 8, 14, 0, 0, tzinfo=UTC)
+    candidate = _make_candidate(timestamp_utc=ts, expiration_date=expiry)
+
+    payload = MLPreFilter._build_payload(candidate)
+
+    assert payload["dte"] == 1
 
 
 # --- SolverEnsemble ---

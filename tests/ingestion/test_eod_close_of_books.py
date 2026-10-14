@@ -440,3 +440,40 @@ async def test_market_open_sleep_path_skips_eod():
         await svc._check_overnight_sleep()
 
     maybe_eod.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_eod_reconciles_recorded_sell_fills_before_the_expiry_sweep():
+    """A lot the live path failed to close must be attributed from `fills` BEFORE the
+    sweep can book it as expired-worthless; a reconcile failure keeps the session open."""
+    await _reset_db()
+    svc = _make_service()
+    from orion.jobs.reconcile_pnl import STATUS_MATCH
+
+    result = MagicMock()
+    result.status = STATUS_MATCH
+    result.trade_date = SESSION
+    order: list[str] = []
+
+    async def _reconcile() -> int:
+        order.append("reconcile")
+        return 1
+
+    async def _sweep() -> int:
+        order.append("sweep")
+        return 0
+
+    with (
+        patch("orion.execution.persistence.reconcile_journal_exits_from_fills", new=AsyncMock(side_effect=_reconcile)),
+        patch("orion.execution.persistence.realize_expired_journal_rows", new=AsyncMock(side_effect=_sweep)),
+        patch("orion.jobs.reconcile_pnl.run_reconciliation", new=AsyncMock(return_value=result)),
+        patch("orion.jobs.bucket_metrics.run_bucket_metrics", new=AsyncMock()),
+    ):
+        assert await svc._run_eod_task(SESSION) is True
+    assert order == ["reconcile", "sweep"]
+
+    with patch(
+        "orion.execution.persistence.reconcile_journal_exits_from_fills",
+        new=AsyncMock(side_effect=RuntimeError("db down")),
+    ):
+        assert await svc._run_eod_task(SESSION) is False

@@ -135,7 +135,7 @@ async def test_429_limit_reject_does_not_escalate_to_native(monkeypatch):
     # Make the limit submission return a 429. Stub the pre-conditions so we reach
     # the submit/escalation decision without exercising quote/resting-cancel I/O.
     ee._cancel_resting_orion_orders = AsyncMock(return_value=True)
-    ee._fresh_close_limit = AsyncMock(return_value=4.5)
+    ee._fresh_close_limit = AsyncMock(return_value=(4.5, {"bid": 4.5, "ask": 4.7}))
     ee._submit_close_limit = AsyncMock(return_value=({"error": "rate limited", "status_code": 429}, "orion_cid"))
     ee._native_close_escalation = AsyncMock(return_value=True)
 

@@ -30,9 +30,14 @@ each rule.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from functools import lru_cache
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from orion.shared.logger import setup_struct_logger
+
+logger = setup_struct_logger(__name__)
 
 _ET = ZoneInfo("America/New_York")
 
@@ -62,7 +67,12 @@ class BucketExitParams:
 
     profit_target_pct: float  # exit at +X (0 disables)
     stop_loss_pct: float  # exit at -X (0 disables)
-    min_dte: int  # exit when DTE <= this (0 disables)
+    # Calendar-day DTE floor, compared STRICTLY: exit once fewer than this many
+    # whole calendar days remain to expiry (min_dte=1 -> exits on expiry day,
+    # min_dte=2 -> exits with 1 day left). 0 disables. Same DTE convention as
+    # the entry rules and bucket_for_dte, so an entry is never exited on the
+    # DTE that admitted it.
+    min_dte: int
     max_hold_hours: float  # exit when held longer (0 disables)
     max_drawdown_pct: float  # retracement from peak (0 disables)
     drawdown_min_peak_pct: float = 0.0  # peak must reach this before drawdown arms
@@ -82,7 +92,7 @@ DEFAULT_BUCKET_PARAMS: dict[str, BucketExitParams] = {
     "0DTE": BucketExitParams(
         profit_target_pct=0.40,
         stop_loss_pct=0.30,
-        min_dte=0,  # a 0DTE is always at min DTE; flatten_after_et is the deadline
+        min_dte=0,  # disabled: a 0DTE's deadline is flatten_after_et, not a DTE floor
         max_hold_hours=0,
         max_drawdown_pct=0,
         no_progress_minutes=90,  # afternoon 0DTE theta ~1%/10min; dead trades bleed
@@ -92,7 +102,7 @@ DEFAULT_BUCKET_PARAMS: dict[str, BucketExitParams] = {
     "SHORT_SWING": BucketExitParams(
         profit_target_pct=0.50,
         stop_loss_pct=0.35,
-        min_dte=1,
+        min_dte=1,  # exits on expiry day; the 15:45 ET flatten backs it up
         # ponytail: wall-clock hours, weekend-blind — a Thu entry fires Sat and
         # the close executes Monday open. Swap for trading-day math if that drift matters.
         max_hold_hours=54,
@@ -102,7 +112,7 @@ DEFAULT_BUCKET_PARAMS: dict[str, BucketExitParams] = {
     "SWING": BucketExitParams(
         profit_target_pct=0.60,
         stop_loss_pct=0.40,
-        min_dte=2,  # final-week theta kills a thesis that hasn't resolved
+        min_dte=2,  # out with 1 day left: final-week theta kills an unresolved thesis
         max_hold_hours=168,  # ~5 trading days incl. one weekend
         max_drawdown_pct=0.40,
         drawdown_min_peak_pct=0.30,
@@ -110,7 +120,7 @@ DEFAULT_BUCKET_PARAMS: dict[str, BucketExitParams] = {
     "POSITION": BucketExitParams(
         profit_target_pct=0.75,
         stop_loss_pct=0.45,
-        min_dte=2,
+        min_dte=2,  # out with 1 day left
         max_hold_hours=336,
         max_drawdown_pct=0.40,
         drawdown_min_peak_pct=0.30,
@@ -141,13 +151,106 @@ def resolve_exit_params(
 ) -> BucketExitParams:
     """Params for a bucket: defaults merged with per-bucket env overrides.
 
-    Unknown buckets get SWING defaults (the conservative middle).
+    Unknown buckets get SWING defaults (the conservative middle). Overrides
+    carry the field's own units — notably `min_dte` is a CALENDAR-day floor
+    compared strictly (exit once fewer than that many days remain), not a
+    fraction-of-a-day threshold.
     """
     base = DEFAULT_BUCKET_PARAMS.get(bucket, DEFAULT_BUCKET_PARAMS["SWING"])
     bucket_overrides = (overrides or {}).get(bucket, {})
     if not bucket_overrides:
         return base
     return replace(base, **bucket_overrides)
+
+
+def _xnys_session_on_or_before(day: date) -> date:
+    """Latest XNYS session at or before ``day``. Raises if the calendar can't answer."""
+    import exchange_calendars as xcals
+    import pandas as pd
+
+    cal = xcals.get_calendar("XNYS")
+    session: date = cal.date_to_session(pd.Timestamp(day), direction="previous").date()
+    return session
+
+
+@lru_cache(maxsize=512)
+def _cached_session_on_or_before(day: date) -> date:
+    """`_xnys_session_on_or_before`, memoised. ONLY successful answers are cached.
+
+    A raised lookup stores nothing, so a calendar outage is retried on the next
+    evaluation instead of freezing a degraded answer in for the life of the
+    process. The one-warning-per-expiry log lives here for the same reason:
+    the cache makes it fire once per contract rather than every monitor cycle.
+    """
+    session = _xnys_session_on_or_before(day)
+    if session != day:
+        logger.warning(
+            "Contract expiry is not a trading session; time stop deadline pulled back",
+            extra={
+                "event": "expiry_not_a_session",
+                "expiry": day.isoformat(),
+                "effective_deadline": session.isoformat(),
+            },
+        )
+    return session
+
+
+# Whether the last calendar lookup failed. Drives edge-triggered alerting: the
+# monitor re-evaluates every tracked position every cycle, so logging each
+# degraded lookup would bury the incident under its own repetitions.
+_calendar_degraded = False
+
+
+def _last_tradeable_date(expiry: date) -> date:
+    """The last date the contract can actually be closed on.
+
+    Normally ``expiry`` itself — every listed contract expires on a session, and
+    all 43 distinct expiries Orion has traded are XNYS sessions. It matters only
+    when a malformed or non-standard expiry lands on a weekend or exchange
+    holiday: counting days to a closed date would leave a min_dte=1 time stop
+    firing for the first time on a day ``close_position`` cannot submit, with
+    the next evaluation already past expiry — silently dropping the last
+    session the position could have been exited on.
+
+    When the calendar cannot answer, the deadline degrades to the nearest
+    weekday at or before ``expiry`` rather than raising: a dead exchange
+    calendar has already blocked every option exit once, and this rule must
+    never be the thing that raises. The degraded answer is deliberately NOT
+    cached, so the holiday case is resolved correctly as soon as the calendar
+    recovers. A degraded deadline cannot see holidays, so entering and leaving
+    that state each raise one alert — the operator, not this rule, closes a
+    holiday-dated contract during a sustained outage. Backing the deadline off
+    a whole weekday instead would exit every healthy position a session early,
+    which for a 1-DTE SHORT_SWING is the same-day dump this rule exists to
+    prevent.
+    """
+    global _calendar_degraded
+    try:
+        effective = _cached_session_on_or_before(expiry)
+    except Exception as e:
+        fallback = expiry
+        while fallback.weekday() >= 5:  # Saturday/Sunday are never tradeable
+            fallback -= timedelta(days=1)
+        if not _calendar_degraded:
+            _calendar_degraded = True
+            logger.error(
+                "Exchange calendar unavailable; expiry time stops are running on weekday-only "
+                "deadlines and cannot see holidays — close any holiday-dated contract by hand",
+                extra={
+                    "event": "expiry_calendar_unavailable",
+                    "expiry": expiry.isoformat(),
+                    "degraded_deadline": fallback.isoformat(),
+                    "error": str(e),
+                },
+            )
+        return fallback
+    if _calendar_degraded:
+        _calendar_degraded = False
+        logger.info(
+            "Exchange calendar resolved again; expiry time stops are session-accurate",
+            extra={"event": "expiry_calendar_recovered", "expiry": expiry.isoformat()},
+        )
+    return effective
 
 
 def _return_fraction(position: Any) -> float:
@@ -323,11 +426,33 @@ class ZeroDTEFlattenRule:
 
 
 class TimeToExpiryRule:
-    """Exit when remaining time-to-expiry is below min_dte days.
+    """Exit when CALENDAR days-to-expiry drops below the bucket's min_dte floor.
+
+    DTE is counted the way the entry rules, `bucket_for_dte` and the entry caps
+    count it: whole calendar days between today's New York date and the
+    contract's expiry date. Wall-clock hours are the wrong unit here — an entry
+    rule that admits 1-3 DTE hands the monitor a position whose remaining
+    fraction of a day is 0.4, and comparing that fraction against the same
+    integer floor exits it minutes after entry for the spread. (5 such exits on
+    2026-08-18, all within 12 minutes of entry, all pure friction.)
+
+    The comparison is STRICT: a position is exited once FEWER than min_dte days
+    remain, so min_dte=1 leaves the whole expiry-day session tradeable and
+    min_dte=2 exits with one day left. min_dte=0 disables the rule (0DTE, whose
+    deadline is `flatten_after_et`).
+
+    "Today" is the New York calendar date, matching `expires_today`: the UTC
+    date rolls over at 20:00 ET and would arm the time stop overnight, a
+    session early. Expiry itself is stored at midnight UTC and encodes the
+    contract's calendar date, so it is read as a UTC date and never converted
+    to ET (which would shift it to the prior evening, a day early). Days are
+    counted to `_last_tradeable_date`, so the deadline is always a day the
+    position can actually be closed on.
 
     Requires `position.expiry_date` to be a tz-aware (or naive UTC) datetime.
     When `expiry_date is None` the rule no-ops — consumer code is responsible
-    for populating the field.
+    for populating the field (`position_monitor` backfills it from the OCC
+    symbol so no option position is left without a time stop).
     """
 
     rule_id = "time_to_expiry_v1"
@@ -344,12 +469,13 @@ class TimeToExpiryRule:
             return None
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=UTC)
-        remaining = (expiry - datetime.now(UTC)).total_seconds() / 86400.0
-        if remaining > self.min_dte:
+        deadline = _last_tradeable_date(expiry.astimezone(UTC).date())
+        dte = (deadline - datetime.now(_ET).date()).days
+        if dte >= self.min_dte:
             return None
         return ExitSignal(
             rule_id=self.rule_id,
-            reason=f"time to expiry: {remaining:.2f} days <= min_dte={self.min_dte}",
+            reason=f"time to expiry: dte={dte} < min_dte={self.min_dte}",
             urgency="IMMEDIATE",
         )
 

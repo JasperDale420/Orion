@@ -107,6 +107,49 @@ def test_add_position_keeps_multiple_contracts_for_same_ticker() -> None:
     assert {p.candidate_id for p in positions} == {"c-1", "c-2"}
 
 
+def test_reconcile_with_empty_broker_snapshot_removes_local_positions() -> None:
+    pm = PositionManager()
+    now = datetime.now(UTC)
+    candidate = _candidate(
+        candidate_id="stale-candidate",
+        ticker="IWM",
+        ts=now,
+        option_symbol="IWM260731P00290000",
+    )
+    decision = _decision(candidate_id="stale-candidate", ticker="IWM", ts=now, limit_price=1.02)
+    pm.add_position(candidate, decision, entry_context={})
+
+    pm.reconcile_with_broker_positions({})
+
+    assert pm.get_open_positions() == []
+
+
+def test_reconcile_keeps_latest_contract_and_uses_broker_quantity() -> None:
+    pm = PositionManager()
+    now = datetime.now(UTC)
+    contract = "AAPL260918C00200000"
+    older = _candidate(candidate_id="older", ticker="AAPL", ts=now, option_symbol=contract)
+    newer = _candidate(
+        candidate_id="newer",
+        ticker="AAPL",
+        ts=now + datetime.resolution,
+        option_symbol=contract,
+    )
+    pm.add_position(older, _decision(candidate_id="older", ticker="AAPL", ts=now, limit_price=2.0), {})
+    pm.add_position(
+        newer,
+        _decision(candidate_id="newer", ticker="AAPL", ts=now + datetime.resolution, limit_price=2.2),
+        {},
+    )
+
+    pm.reconcile_with_broker_positions({contract: {"qty": 3.0, "avg_entry": 2.1}})
+
+    positions = pm.get_open_positions()
+    assert len(positions) == 1
+    assert positions[0].candidate_id == "newer"
+    assert positions[0].qty == 3.0
+
+
 @pytest.mark.asyncio
 async def test_initialize_loads_more_than_fifty_open_positions(setup_test_db) -> None:
     now = datetime.now(UTC)

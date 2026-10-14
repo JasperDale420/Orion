@@ -58,7 +58,7 @@ async def test_risk_manager_process_fill_closes_position_profit():
     await rm.process_fill("AAPL", qty=10.0, price=100.0, side="buy", fill_id="pnl_4")
 
     # Sell 5 @ 120 (Profit 20 * 5 = 100)
-    await rm.process_fill("AAPL", qty=5.0, price=120.0, side="sell", fill_id="pnl_5")
+    await rm.process_fill("AAPL", qty=5.0, price=120.0, side="sell", fill_id="pnl_5", filled_at=datetime.now(UTC))
 
     assert rm.positions["AAPL"]["qty"] == 5.0
     assert rm.positions["AAPL"]["avg_entry"] == pytest.approx(100.0)  # Unchanged

@@ -4,7 +4,6 @@ UW IV Rank Connector.
 Fetches IV rank and percentile via Data Gateway.
 """
 
-import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -31,55 +30,31 @@ class UWIVRankConnector(BaseGatewayConnector):
     async def fetch_and_store(self, tickers: list[str]) -> int:
         """Fetch IV rank for multiple tickers and store (bounded concurrency)."""
         now = datetime.now(UTC)
-        semaphore = asyncio.Semaphore(3)
 
-        async def _fetch_one(ticker: str) -> int:
-            async with semaphore:
-                try:
-                    data = await asyncio.to_thread(self._fetch_iv_rank, ticker)
-                except Exception as e:
-                    logger.warning("iv_rank_retry_exhausted", ticker=ticker, error=str(e))
-                    return 0
-                finally:
-                    await asyncio.sleep(0.5)  # Rate limit between requests
+        async def _process(ticker: str, iv_data: Any) -> int:
+            # Handle both list and dict responses from UW API
+            if isinstance(iv_data, list):
+                iv_data = iv_data[0] if iv_data else {}
 
-                if not data or "data" not in data:
-                    return 0
+            if not isinstance(iv_data, dict):
+                logger.warning("unexpected_iv_data_type", ticker=ticker, data_type=str(type(iv_data)))
+                return 0
 
-                iv_data = data["data"]
-                if not iv_data:
-                    return 0
+            record = {
+                "ticker": ticker,
+                "ts_utc": now,
+                "iv_rank": float(iv_data.get("iv_rank") or 0),
+                "iv_percentile": float(iv_data.get("iv_percentile") or 0),
+                "current_iv": float(iv_data.get("current_iv") or 0),
+                "iv_52w_high": float(iv_data.get("iv_high") or 0),
+                "iv_52w_low": float(iv_data.get("iv_low") or 0),
+                "iv_30d": float(iv_data.get("iv_30d") or 0),
+            }
 
-                # Handle both list and dict responses from UW API
-                if isinstance(iv_data, list):
-                    iv_data = iv_data[0] if iv_data else {}
+            await self._persist_iv_rank(record)
+            return 1
 
-                if not isinstance(iv_data, dict):
-                    logger.warning("unexpected_iv_data_type", ticker=ticker, data_type=str(type(iv_data)))
-                    return 0
-
-                record = {
-                    "ticker": ticker,
-                    "ts_utc": now,
-                    "iv_rank": float(iv_data.get("iv_rank") or 0),
-                    "iv_percentile": float(iv_data.get("iv_percentile") or 0),
-                    "current_iv": float(iv_data.get("current_iv") or 0),
-                    "iv_52w_high": float(iv_data.get("iv_high") or 0),
-                    "iv_52w_low": float(iv_data.get("iv_low") or 0),
-                    "iv_30d": float(iv_data.get("iv_30d") or 0),
-                }
-
-                await self._persist_iv_rank(record)
-                return 1
-
-        results = await asyncio.gather(*[_fetch_one(t) for t in tickers], return_exceptions=True)
-        stored = 0
-        for i, r in enumerate(results):
-            if isinstance(r, Exception):
-                logger.error("iv_rank_ticker_failed", ticker=tickers[i], error=str(r))
-            else:
-                stored += r
-        return stored
+        return await self._fetch_many_bounded(tickers, self._fetch_iv_rank, _process, label="iv_rank", log=logger)
 
     async def _persist_iv_rank(self, record: dict[str, Any]) -> None:
         """Persist latest IV rank rows in memory."""

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 
 import pytest
 
@@ -55,7 +56,7 @@ async def test_closing_fill_exceeds_position_clamps_pnl_and_logs(risk_manager_fa
     # A closing fill of 15 @ 110 arrives while only 10 is known (out-of-order
     # partial delivery). PnL must clamp to the known 10 contracts:
     #   (110 - 100) * 10 = 100  — NOT (110 - 100) * 15 = 150.
-    outcome = await rm.process_fill("AAPL", 15, 110.0, "sell", fill_id="oversized_close")
+    outcome = await rm.process_fill("AAPL", 15, 110.0, "sell", fill_id="oversized_close", filled_at=datetime.now(UTC))
 
     # PnL clamped to old_qty (10), not the oversized fill qty (15).
     assert outcome.realized_pnl == pytest.approx(100.0)

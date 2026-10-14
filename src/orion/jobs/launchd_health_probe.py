@@ -8,11 +8,10 @@ logs/launchd_health.log for anything not healthy, and dispatches a
 notification.
 
 Wired in via scripts/launchd/com.empire.orion.launchd-health.plist with
-StartInterval=60 — i.e. once a minute. The notifier defaults to POSTing to
-the Discord webhook (DISCORD_WEBHOOK_URL, sourced from .env by the wrapper)
-when that env var is set; absent the env var the probe still writes to the
-log so the failure is auditable after the fact. Because the probe fires every
-minute on the SAME frozen last-exit code, the Discord notifier dedups per
+StartInterval=60 — i.e. once a minute. It alerts when a required daemon is
+missing or an idle job has an unexpected non-zero last exit. A current PID is
+healthy even if launchd retains an older exit status, and self-reporting checks'
+documented result codes are not re-paged here. The Discord notifier dedups per
 (label, exit_code): a stuck job pages at most once per hour, not every minute.
 """
 
@@ -79,6 +78,16 @@ REQUIRED_LABELS = frozenset(
 # scheduled fire will exit 127 until a human edits the plist. Treating
 # it as CRITICAL (vs WARNING) is the whole point of this probe.
 EXIT_CODE_COMMAND_NOT_FOUND = 127
+
+# These one-shot checks return 2 after dispatching their own incident alert.
+# Treating that documented result as a second job-health failure only repeats
+# the same page through this probe; unexpected statuses still alert.
+EXPECTED_CONDITION_EXITS = frozenset(
+    {
+        (DEFAULT_PREFIX + "deadman", 2),
+        (DEFAULT_PREFIX + "market-open-dataflow-check", 2),
+    }
+)
 
 
 class Severity(str, Enum):
@@ -148,15 +157,15 @@ def classify_entry(entry: LaunchctlEntry) -> HealthAlert:
     """Map a single launchctl entry to a HealthAlert (severity OK if
     nothing is wrong).
 
-    Rule: alert iff exit_code != 0. PID `-` with exit 0 is the idle
-    one-shot pattern (e.g. a StartCalendarInterval job between fires)
-    and is explicitly NOT an alert — that distinction was the whole
-    reason the rule was specified this way.
+    A current PID is healthy even when launchd retains a prior non-zero exit
+    status. Idle one-shots are healthy after exit 0, and self-reporting checks
+    are healthy after their documented "condition found" exit. Other non-zero
+    exits alert.
     """
-    if entry.exit_code == 0:
+    if entry.pid is not None or entry.exit_code == 0 or (entry.label, entry.exit_code) in EXPECTED_CONDITION_EXITS:
         return HealthAlert(
             label=entry.label,
-            exit_code=0,
+            exit_code=entry.exit_code,
             pid=entry.pid,
             severity=Severity.OK,
             message="healthy",

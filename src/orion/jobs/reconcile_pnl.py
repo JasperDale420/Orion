@@ -2,7 +2,7 @@
 
 WHY (redesign R5 / task RB.3 — measurement before evolution):
 The trade journal's realized-PnL write-back (``execution/persistence.py
-::persist_realized_pnl_to_journal``) has existed since 2026-06-08 but has NEVER
+::allocate_exit_to_journal``, formerly ``persist_realized_pnl_to_journal``) has existed since 2026-06-08 but has NEVER
 been verified against an independent source. Nothing — not solver demotion, not
 meta evolution — may act on journal PnL until it reconciles. This job is that
 gate. It produces RECOMMENDATIONS ONLY: it persists measurements and (via the

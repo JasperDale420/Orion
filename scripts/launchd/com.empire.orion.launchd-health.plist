@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
 launchd agent for the Orion launchd-health probe — runs once a minute
-and alerts on any com.empire.orion.* job whose last exit code is
-non-zero.
+and alerts when a required daemon is missing or an idle Orion job has an
+unexpected non-zero last exit code.
 
 Why this exists: on 2026-05-22 the com.empire.orion.orphan-close plist
 hardcoded /opt/homebrew/bin/uv (which doesn't exist on this host) and
@@ -16,8 +16,10 @@ classifies each entry, appends a JSON row to logs/launchd_health.log for
 anything not healthy, and POSTs to the Discord webhook (DISCORD_WEBHOOK_URL,
 sourced from .env by the wrapper) when that env var is set. The Discord
 notifier dedups per (label, exit_code) so a stuck job pages at most hourly,
-not every minute. Exit 127 is escalated to CRITICAL (the failure mode cannot
-self-heal — a human must edit the plist).
+not every minute. Running jobs ignore retained prior exit statuses, and checks
+that already page their own detected condition are not paged a second time.
+Exit 127 is escalated to CRITICAL (the failure mode cannot self-heal — a human
+must edit the plist).
 
 Install (create the log dir FIRST — launchd opens StandardOutPath /
 StandardErrorPath below before the wrapper ever runs, so a missing

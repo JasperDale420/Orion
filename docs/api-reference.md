@@ -50,7 +50,7 @@ Grouped by tag. Source line numbers are stable references into `api/main.py`.
 | Method | Path | Query params |
 |---|---|---|
 | GET | `/metrics` | `solver_id` (str), `dataset_tag` (str), `limit` (int) |
-| GET | `/experiments` | List meta-search experiments |
+| GET | `/experiments` | List retained historical experiment records |
 
 ### Promotions (solver lifecycle)
 
@@ -68,7 +68,6 @@ Approving moves a solver to the next lifecycle stage
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/search` | RAG hybrid search with metadata filters. **503** when pgvector or embeddings are unavailable. |
 | GET | `/events/{event_id}` | Fetch Bronze `EventEnvelope` by id |
 | GET | `/candidates/{candidate_id}` | Fetch `CandidateTrade` row |
 | GET | `/rollups` | Query rollups by ticker / period |
@@ -103,9 +102,8 @@ positions per its rules.
 - Most read endpoints return Pydantic models from `api/schemas.py`
   (`SolverResponse`, `SolverMetricsResponse`, `ExperimentResponse`,
   `PromotionRecommendationResponse`, …).
-- `/search` and `/flows` may return `503` with the standard error envelope
-  when their backing data sources are degraded — clients should treat 503 as
-  retryable.
+- `/flows` may return `503` with the standard error envelope when Heber reads
+  are degraded — clients should treat 503 as retryable.
 
 ## Rate limiting
 
@@ -115,10 +113,7 @@ or ingress) if you need one.
 ## Local exploration
 
 ```bash
-# Boot the API alongside the rest of the stack
-docker compose up -d api    # if the api service is configured in compose
-
-# Or run the FastAPI app directly during development
+# Run the FastAPI app directly during development
 uv run uvicorn orion.api.main:app --reload --port 8000
 
 # OpenAPI / Swagger UI

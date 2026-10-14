@@ -11,6 +11,8 @@ Equity symbols must stay unmultiplied, so each option case is paired with an
 equity case that pins the existing behavior.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from orion.config import RiskSettings
@@ -32,7 +34,7 @@ async def test_option_realized_profit_applies_contract_multiplier(risk_manager_f
 
     # Buy 1 contract @ $2.00 premium, sell @ $3.00 => $1.00 x 1 x 100 = $100.
     await rm.process_fill(OPTION, 1, 2.00, "buy", fill_id="opt_buy_1")
-    await rm.process_fill(OPTION, 1, 3.00, "sell", fill_id="opt_sell_1")
+    await rm.process_fill(OPTION, 1, 3.00, "sell", fill_id="opt_sell_1", filled_at=datetime.now(UTC))
 
     assert rm.current_equity == pytest.approx(10100.0)
     assert rm.current_daily_loss == pytest.approx(-100.0)
@@ -61,7 +63,7 @@ async def test_equity_realized_pnl_has_no_multiplier(risk_manager_factory):
     rm.current_daily_loss = 0.0
 
     await rm.process_fill(EQUITY, 10, 100.0, "buy", fill_id="eq_buy_1")
-    await rm.process_fill(EQUITY, 10, 110.0, "sell", fill_id="eq_sell_1")
+    await rm.process_fill(EQUITY, 10, 110.0, "sell", fill_id="eq_sell_1", filled_at=datetime.now(UTC))
 
     assert rm.current_equity == pytest.approx(10100.0)
     assert rm.current_daily_loss == pytest.approx(-100.0)

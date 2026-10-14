@@ -65,11 +65,17 @@ class TestPreferHeberContextReads:
         assert _prefer_heber_context_reads() is expected
 
     @pytest.mark.unit
-    def test_default_is_true(self):
-        from orion.main_feature_enrichment import _prefer_heber_context_reads
+    def test_default_is_false(self):
+        from orion.config import SystemSettings
 
-        # Default is True (field default in SystemSettings)
-        assert _prefer_heber_context_reads() is True
+        # Assert the field's own declared default, not the resolved
+        # singleton — `uv run` auto-loads the repo-root .env, so this must
+        # not depend on whatever that file (or the real environment)
+        # happens to currently set the var to. Defaults false (2026-08-18
+        # incident: RegimeGate had no way to distinguish this flag's proxy
+        # vix source from a trusted one) so a raw/non-compose launch can't
+        # silently re-enable it.
+        assert SystemSettings.model_fields["feature_enrichment_prefer_heber_context"].default is False
 
 
 # ---------------------------------------------------------------------------
@@ -545,6 +551,20 @@ class TestNoteTickerSourceStreak:
         assert result == 0
 
     @pytest.mark.unit
+    def test_streak_resets_on_market_closed_idle(self):
+        """An empty bronze result while the market is closed is idle, not
+        degraded: it must reset the streak like a healthy source so a weekend
+        cannot accumulate a DEGRADED fence into Monday's open."""
+        from orion.main_feature_enrichment import _note_ticker_source_streak
+
+        with patch("orion.main_feature_enrichment.logger") as mock_logger:
+            result = _note_ticker_source_streak(
+                source="market_closed_idle", non_heber_streak=99, warn_streak=3, tickers_count=10
+            )
+        assert result == 0
+        mock_logger.warning.assert_not_called()
+
+    @pytest.mark.unit
     def test_warns_at_threshold(self):
         from orion.main_feature_enrichment import _note_ticker_source_streak
 
@@ -637,6 +657,20 @@ class TestLogTickerSourceTransition:
             mock_logger.warning.assert_called_once()
 
     @pytest.mark.unit
+    def test_transition_to_market_closed_idle_logs_info_once(self):
+        from orion.main_feature_enrichment import _log_ticker_source_transition
+
+        with patch("orion.main_feature_enrichment.logger") as mock_logger:
+            result = _log_ticker_source_transition("market_closed_idle", "bronze_db", 10)
+            assert result == "market_closed_idle"
+            mock_logger.info.assert_called_once()
+            mock_logger.warning.assert_not_called()
+
+            # Same source on the next cycle: no repeat log
+            _log_ticker_source_transition("market_closed_idle", result, 10)
+            mock_logger.info.assert_called_once()
+
+    @pytest.mark.unit
     def test_transition_from_none(self):
         from orion.main_feature_enrichment import _log_ticker_source_transition
 
@@ -723,6 +757,7 @@ class TestGetActiveTickersWithSource:
         from orion.main_feature_enrichment import STATIC_TICKER_FALLBACK, get_active_tickers_with_source
 
         with (
+            patch("orion.core.market_schedule.MarketSchedule.is_market_open", return_value=True),
             patch("orion.enrichment.heber_context._heber_reader") as mock_reader,
             patch("orion.enrichment.heber_context._extract_tickers_from_bars", return_value=[]),
         ):
@@ -738,6 +773,7 @@ class TestGetActiveTickersWithSource:
         from orion.main_feature_enrichment import STATIC_TICKER_FALLBACK, get_active_tickers_with_source
 
         with (
+            patch("orion.core.market_schedule.MarketSchedule.is_market_open", return_value=True),
             patch("orion.enrichment.heber_context._heber_reader") as mock_reader,
             patch("orion.enrichment.heber_context._extract_tickers_from_bars", return_value=[]),
         ):
