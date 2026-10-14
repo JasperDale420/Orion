@@ -2079,6 +2079,12 @@ class ExecutionEngine:
             if hasattr(self.risk_manager, "clear_intended_position_greeks"):
                 self.risk_manager.clear_intended_position_greeks(candidate.ticker)
             reason = self._block_entry_outside_session(decision, candidate, session, stage="pre_submit")
+            # Always FALSE here, even for a confirmed close: this attempt already
+            # reserved risk and wrote an order row, which is finalized REJECTED
+            # below. A SKIPPED decision with a REJECTED row would be re-labelled
+            # FALSE by startup reconciliation after a crash in between, so the
+            # two are kept consistent from the start (adversarial review).
+            decision.executed_successfully = DecisionStatus.FALSE
             await persist_order_finalize(
                 client_order_id=client_order_id,
                 broker_order=None,

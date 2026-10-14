@@ -245,7 +245,10 @@ async def test_entry_gate_does_not_read_the_clock_when_the_calendar_already_bloc
 @pytest.mark.parametrize(
     ("second_clock", "expected_status"),
     [
-        ({"is_open": False}, DecisionStatus.SKIPPED),  # session closed mid-flight
+        # FALSE even for a confirmed close: the attempt already wrote an order
+        # row (finalized REJECTED), and startup reconciliation maps REJECTED to
+        # FALSE — the decision must agree with its row.
+        ({"is_open": False}, DecisionStatus.FALSE),  # session closed mid-flight
         ({"is_open": True, "status_code": 429}, DecisionStatus.FALSE),  # unverifiable at submit time
     ],
 )
