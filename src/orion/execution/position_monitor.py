@@ -21,6 +21,7 @@ from orion.ml.exit_classifier import (
     ExitPrediction,
     get_exit_classifier,
 )
+from orion.shared.alerts import send_discord_alert
 from orion.shared.db_utils import db_query
 from orion.shared.liveness import publish_liveness
 from orion.shared.logger import setup_struct_logger
@@ -1381,24 +1382,48 @@ class PositionMonitor:
                 },
             )
 
+    async def _alert_close_blocked_no_engine(self, symbol: str) -> None:
+        """CRITICAL log per blocked close plus one de-duplicated operator alert.
+
+        One dedupe key for the whole condition, not one per symbol: a missing
+        engine blocks every open position at once, and the per-symbol detail is
+        already in the log.
+        """
+        logger.critical(
+            f"Exit for {symbol} NOT submitted: the position monitor has no execution engine. "
+            "Closes go only through the engine's guarded close path; restart the monitor "
+            "with an engine and verify open positions are exiting.",
+            extra={
+                "event": "close_blocked_no_execution_engine",
+                "event_type": "CLOSE_BLOCKED_NO_EXECUTION_ENGINE",
+                "symbol": symbol,
+            },
+        )
+        await send_discord_alert(
+            "Position monitor is running WITHOUT an execution engine — exits are blocked "
+            "(no close is submitted). Restart it with an engine and verify open positions.",
+            dedupe_key="position_monitor_no_execution_engine",
+        )
+
     async def execute_exits(
         self,
-        connector: Any,
         exit_signals: list[tuple[TrackedPosition, ExitPrediction]],
         dry_run: bool = False,
     ) -> list[dict[str, Any]]:
         """
         Execute exit orders for positions with exit signals.
 
-        Routes through ExecutionEngine.close_position() when available to ensure
-        circuit breaker, rate limiter, risk manager, and order persistence are applied.
-        Falls back to direct connector call only when no engine is configured.
+        Every close routes through ExecutionEngine.close_position(), which owns
+        the options session gate, the live-quantity and reduce-only checks,
+        attribution, the resting-order cancel sweep and order persistence.
+        Without an engine no close is attempted: the exit is recorded as a
+        failed close (so the retry budget still abandons and alerts on the
+        position) and a CRITICAL plus an operator alert are raised.
 
         Uses PositionManager._closing_symbols guard to prevent duplicate close orders
         from both the ML exit classifier and rule-based exit logic.
 
         Args:
-            connector: AlpacaTradingConnector
             exit_signals: List of (position, prediction) tuples
             dry_run: If True, log but don't execute
 
@@ -1488,6 +1513,21 @@ class PositionMonitor:
                     results.append(result)
                     continue
 
+                # Fail closed without an engine. The raw connector close skipped
+                # every safeguard close_position applies (session gate,
+                # reduce-only and live-quantity checks, attribution, order
+                # persistence), and against the async Gateway client it returned
+                # an un-awaited coroutine that read as a successful close.
+                # Charged as a failure so a misconfigured monitor still abandons
+                # the position and raises CLOSE_ABANDONED rather than looking
+                # healthy.
+                if self._execution_engine is None:
+                    await self._alert_close_blocked_no_engine(pos.symbol)
+                    result["error"] = "no_execution_engine"
+                    self._record_close_result(pos.symbol, False)
+                    results.append(result)
+                    continue
+
                 # Mark symbol as closing before submitting order
                 if self._position_manager:
                     if not self._position_manager.mark_closing(pos.symbol):
@@ -1496,51 +1536,35 @@ class PositionMonitor:
                         continue
 
                 try:
-                    closed = False
+                    # A fallback rule's prediction carries its own rule_id,
+                    # which is what exit_decisions records; a classifier
+                    # prediction has none and keeps the ml_exit label.
+                    # Urgency is always IMMEDIATE regardless of the rule:
+                    # close_position keys equity market-vs-limit routing
+                    # on it, and a monitor exit is meant to close now.
+                    exit_signal = SimpleNamespace(
+                        rule_id=getattr(prediction, "rule_id", None) or f"ml_exit_{pos.bucket}",
+                        reason=prediction.reasoning,
+                        urgency="IMMEDIATE",
+                        confidence=prediction.confidence,
+                        details={"bucket": pos.bucket, "pnl_pct": pos.unrealized_pnl_pct},
+                    )
 
-                    if self._execution_engine is not None:
-                        # Route through ExecutionEngine for circuit breaker, rate limiter,
-                        # risk manager, and order persistence
-                        from types import SimpleNamespace
-
-                        # A fallback rule's prediction carries its own rule_id,
-                        # which is what exit_decisions records; a classifier
-                        # prediction has none and keeps the ml_exit label.
-                        # Urgency is always IMMEDIATE regardless of the rule:
-                        # close_position keys equity market-vs-limit routing
-                        # on it, and a monitor exit is meant to close now.
-                        exit_signal = SimpleNamespace(
-                            rule_id=getattr(prediction, "rule_id", None) or f"ml_exit_{pos.bucket}",
-                            reason=prediction.reasoning,
-                            urgency="IMMEDIATE",
-                            confidence=prediction.confidence,
-                            details={"bucket": pos.bucket, "pnl_pct": pos.unrealized_pnl_pct},
-                        )
-
-                        # `use_market_order=False` for the options path —
-                        # close_position routes options through limit orders
-                        # regardless of urgency, because Alpaca rejects
-                        # options market orders outside RTH (42210000).
-                        # Pass `current_price` (the mark sync_positions
-                        # maintains on `TrackedPosition`) so the limit can
-                        # be derived without a separate quote lookup.
-                        closed = await self._execution_engine.close_position(
-                            ticker=pos.symbol,
-                            qty=pos.qty,
-                            exit_signal=exit_signal,
-                            direction=pos.direction,
-                            use_market_order=False,
-                            current_price=pos.current_price,
-                        )
-                    else:
-                        # Fallback: direct connector call (legacy path, no safety guards)
-                        logger.warning(
-                            f"No ExecutionEngine configured — closing {pos.symbol} directly via connector",
-                            extra={"event": "direct_close_fallback", "symbol": pos.symbol},
-                        )
-                        close_symbol = pos.option_symbol or pos.symbol
-                        order = connector.close_position(close_symbol)
-                        closed = order is not None
+                    # `use_market_order=False` for the options path —
+                    # close_position routes options through limit orders
+                    # regardless of urgency, because Alpaca rejects
+                    # options market orders outside RTH (42210000).
+                    # Pass `current_price` (the mark sync_positions
+                    # maintains on `TrackedPosition`) so the limit can
+                    # be derived without a separate quote lookup.
+                    closed = await self._execution_engine.close_position(
+                        ticker=pos.symbol,
+                        qty=pos.qty,
+                        exit_signal=exit_signal,
+                        direction=pos.direction,
+                        use_market_order=False,
+                        current_price=pos.current_price,
+                    )
 
                     if closed:
                         result["executed"] = True
@@ -1684,7 +1708,7 @@ class PositionMonitor:
         # Execute exits
         results = []
         if exit_signals:
-            results = await self.execute_exits(connector, exit_signals, dry_run=dry_run)
+            results = await self.execute_exits(exit_signals, dry_run=dry_run)
 
         summary = {
             "timestamp": self._last_check_time.isoformat(),

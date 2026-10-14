@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -74,7 +75,7 @@ class TestPositionMonitorRouting:
 
         with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
             with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
-                results = await monitor.execute_exits(connector, [(pos, prediction)], dry_run=False)
+                results = await monitor.execute_exits([(pos, prediction)], dry_run=False)
 
         # ExecutionEngine.close_position should have been called
         engine.close_position.assert_called_once()
@@ -115,7 +116,7 @@ class TestPositionMonitorRouting:
 
         with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
             with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
-                await monitor.execute_exits(connector, [(pos, prediction)], dry_run=False)
+                await monitor.execute_exits([(pos, prediction)], dry_run=False)
 
         call_kwargs = engine.close_position.call_args.kwargs
         exit_signal = call_kwargs["exit_signal"]
@@ -157,30 +158,106 @@ class TestPositionMonitorRouting:
 
         with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
             with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
-                await monitor.execute_exits(connector, [(pos, prediction)], dry_run=False)
+                await monitor.execute_exits([(pos, prediction)], dry_run=False)
 
         exit_signal = engine.close_position.call_args.kwargs["exit_signal"]
         assert exit_signal.rule_id == "profit_target_v1"
         assert exit_signal.urgency == "IMMEDIATE"
         assert exit_signal.reason == "profit target hit: return=+61.0% >= target=60.0%"
 
+
+@pytest.mark.unit
+class TestPositionMonitorWithoutEngineFailsClosed:
+    """Without an ExecutionEngine the monitor must never close through the raw
+    connector. That path bypassed the options session gate, the reduce-only and
+    live-quantity checks, attribution, the cancel sweep and order persistence —
+    and with the async Gateway client it reported an un-awaited coroutine as a
+    successful close."""
+
+    @staticmethod
+    async def _exit(
+        monitor: PositionMonitor, connector: Any, pos: TrackedPosition, *, dry_run: bool = False
+    ) -> list[dict[str, Any]]:
+        """One full check cycle with the broker connector in hand: the cycle
+        syncs `pos` and fires an exit for it, exactly as the live loop would."""
+        with (
+            patch.object(monitor, "sync_positions", new=AsyncMock(return_value=[pos])),
+            patch.object(monitor, "evaluate_exits", return_value=[(pos, _exit_prediction())]),
+            patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock),
+            patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock),
+        ):
+            summary = await monitor.run_check(connector, dry_run=dry_run)
+        return cast(list[dict[str, Any]], summary["exits"])
+
+    @pytest.mark.parametrize(
+        ("symbol", "option_symbol"),
+        [
+            ("MSFT", None),
+            ("AAPL260918P00200000", "AAPL260918P00200000"),
+            # An entry-context timeout leaves an OCC position without option_symbol.
+            ("AAPL260918P00200000", None),
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_falls_back_to_connector_when_no_engine(self) -> None:
-        """Without an ExecutionEngine, the monitor should fall back to direct connector calls."""
+    async def test_never_calls_connector_close(self, symbol: str, option_symbol: str | None) -> None:
         pm = PositionManager()
         monitor = PositionMonitor(execution_engine=None, position_manager=pm)
-
-        pos = _tracked_position(symbol="MSFT", qty=3.0, option_symbol=None)
-        prediction = _exit_prediction()
         connector = MagicMock()
         connector.close_position.return_value = SimpleNamespace(id="order-1")
 
-        with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
-            with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
-                results = await monitor.execute_exits(connector, [(pos, prediction)], dry_run=False)
+        with patch("orion.execution.position_monitor.send_discord_alert", new_callable=AsyncMock) as alert:
+            results = await self._exit(monitor, connector, _tracked_position(symbol=symbol, option_symbol=option_symbol))
 
-        connector.close_position.assert_called_once_with("MSFT")
-        assert results[0]["executed"] is True
+        connector.close_position.assert_not_called()
+        assert results[0]["executed"] is False
+        assert results[0]["error"] == "no_execution_engine"
+        alert.assert_awaited_once()
+        # The closing guard is not left held.
+        assert not pm.is_closing(symbol)
+
+    @pytest.mark.asyncio
+    async def test_async_connector_is_never_reported_as_a_successful_close(self) -> None:
+        monitor = PositionMonitor(execution_engine=None, position_manager=PositionManager())
+        connector = MagicMock()
+        connector.close_position = AsyncMock(return_value={"id": "order-1"})
+
+        with patch("orion.execution.position_monitor.send_discord_alert", new_callable=AsyncMock):
+            results = await self._exit(monitor, connector, _tracked_position(symbol="AAPL260918P00200000"))
+
+        connector.close_position.assert_not_called()
+        assert results[0]["executed"] is False
+
+    @pytest.mark.asyncio
+    async def test_counts_against_the_retry_budget_until_abandoned(self) -> None:
+        """Each blocked attempt is a failed close, so a monitor running without an
+        engine abandons the position and raises the CLOSE_ABANDONED critical
+        instead of looking healthy."""
+        monitor = PositionMonitor(execution_engine=None, position_manager=PositionManager())
+        connector = MagicMock()
+        pos = _tracked_position(symbol="MSFT")
+
+        with patch("orion.execution.position_monitor.send_discord_alert", new_callable=AsyncMock):
+            for attempt in range(1, monitor._MAX_CONSECUTIVE_CLOSE_FAILURES + 1):
+                results = await self._exit(monitor, connector, pos)
+                assert results[0]["error"] == "no_execution_engine"
+                assert monitor._consecutive_close_failures["MSFT"] == attempt
+            results = await self._exit(monitor, connector, pos)
+
+        assert results[0]["error"] == "close_abandoned_after_repeated_failures"
+        connector.close_position.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dry_run_without_engine_is_unchanged(self) -> None:
+        monitor = PositionMonitor(execution_engine=None, position_manager=PositionManager())
+        connector = MagicMock()
+
+        with patch("orion.execution.position_monitor.send_discord_alert", new_callable=AsyncMock) as alert:
+            results = await self._exit(monitor, connector, _tracked_position(), dry_run=True)
+
+        assert results[0]["error"] == "dry_run"
+        connector.close_position.assert_not_called()
+        alert.assert_not_awaited()
+        assert monitor._consecutive_close_failures == {}
 
 
 @pytest.mark.unit
@@ -203,7 +280,7 @@ class TestPositionMonitorClosingGuardIntegration:
         connector = MagicMock()
 
         with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
-            results = await monitor.execute_exits(connector, [(pos, prediction)], dry_run=False)
+            results = await monitor.execute_exits([(pos, prediction)], dry_run=False)
 
         # Should NOT have called the engine
         engine.close_position.assert_not_called()
@@ -227,7 +304,7 @@ class TestPositionMonitorClosingGuardIntegration:
 
         with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
             with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
-                await monitor.execute_exits(connector, [(pos, prediction)], dry_run=False)
+                await monitor.execute_exits([(pos, prediction)], dry_run=False)
 
         # Guard should be released
         assert not pm.is_closing("AAPL")
@@ -246,7 +323,7 @@ class TestPositionMonitorClosingGuardIntegration:
         connector = MagicMock()
 
         with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
-            results = await monitor.execute_exits(connector, [(pos, prediction)], dry_run=False)
+            results = await monitor.execute_exits([(pos, prediction)], dry_run=False)
 
         # Guard should still be released even on failure
         assert not pm.is_closing("AAPL")
@@ -267,7 +344,7 @@ class TestPositionMonitorClosingGuardIntegration:
         connector = MagicMock()
 
         with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
-            results = await monitor.execute_exits(connector, [(pos, prediction)], dry_run=True)
+            results = await monitor.execute_exits([(pos, prediction)], dry_run=True)
 
         assert not pm.is_closing("AAPL")
         engine.close_position.assert_not_called()
