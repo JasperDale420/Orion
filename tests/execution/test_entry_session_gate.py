@@ -240,3 +240,44 @@ async def test_entry_gate_does_not_read_the_clock_when_the_calendar_already_bloc
     await _run_entry(engine)
 
     client.get_clock.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("second_clock", "expected_status"),
+    [
+        ({"is_open": False}, DecisionStatus.SKIPPED),  # session closed mid-flight
+        ({"is_open": True, "status_code": 429}, DecisionStatus.FALSE),  # unverifiable at submit time
+    ],
+)
+@pytest.mark.asyncio
+async def test_entry_aborted_when_session_closes_between_gate_and_submit(
+    second_clock: dict[str, Any], expected_status: DecisionStatus
+) -> None:
+    """The reservation and pending-row write between the first gate and the
+    submit can cross the close. Alpaca queues a day order placed after the close
+    rather than rejecting it, so the session is re-confirmed immediately before
+    the submit; a failed re-check unwinds every reservation, finalizes the
+    pending row as never submitted, and is not counted as a broker failure."""
+    engine, client = _make_engine(schedule=_schedule(open_=True), clock={"is_open": True})
+    client.get_clock.side_effect = [{"is_open": True}, second_clock]
+    engine.risk_manager.clear_intended_position_greeks = MagicMock()
+    candidate, decision = _candidate_and_decision()
+
+    with (
+        patch("orion.execution.execution_engine.persist_pending_order", new=AsyncMock()) as persist,
+        patch("orion.execution.execution_engine.persist_order_finalize", new=AsyncMock()) as finalize,
+    ):
+        await engine.execute_order(decision, candidate)
+
+    client.create_order.assert_not_called()
+    persist.assert_awaited_once()
+    engine.risk_manager.update_post_trade.assert_awaited_once()
+    client_order_id = decision.execution_params["client_order_id"]
+    engine.risk_manager.remove_pending_order.assert_awaited_once_with(client_order_id)
+    engine.risk_manager.clear_intended_position_greeks.assert_called_once_with(candidate.ticker)
+    finalize.assert_awaited_once()
+    assert finalize.await_args.kwargs["client_order_id"] == client_order_id
+    assert finalize.await_args.kwargs["broker_order"] is None
+    assert finalize.await_args.kwargs["error_message"]
+    assert len(engine.order_history) == 0
+    assert decision.executed_successfully == expected_status

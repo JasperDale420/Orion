@@ -1788,6 +1788,35 @@ class ExecutionEngine:
 
         return True
 
+    @staticmethod
+    def _block_entry_outside_session(decision: Any, candidate: Any, session: str, *, stage: str) -> str:
+        """Record an entry blocked by the session gate; returns the reason.
+
+        A confirmed-shut session is a skip; one that cannot be verified is a
+        failure. Neither is a broker round-trip, so the caller must not record
+        it against the error-rate circuit breaker.
+        """
+        session_closed = session == "closed"
+        reason = (
+            "Options session closed"
+            if session_closed
+            else "Options session unverified (calendar or broker clock unavailable)"
+        )
+        logger.warning(
+            "EXECUTION BLOCKED: options session not confirmed open",
+            extra={
+                "event_type": "EXECUTION_BLOCKED",
+                "reason": "Options Session Closed" if session_closed else "Options Session Unverified",
+                "session_state": session,
+                "stage": stage,
+                "ticker": candidate.ticker,
+                "option_symbol": candidate.option_symbol,
+            },
+        )
+        decision.executed_successfully = DecisionStatus.SKIPPED if session_closed else DecisionStatus.FALSE
+        decision.reason = reason
+        return reason
+
     def _check_circuit_breaker(self) -> bool:
         """Trip when the broker-error rate exceeds threshold within the
         configured time window AND we've seen at least min_samples broker
@@ -1966,31 +1995,14 @@ class ExecutionEngine:
 
         # Session fence. Placed after the rate-limiter wait (up to 10s, which
         # can itself cross the close) and before any risk, greeks or
-        # pending-order reservation, so a block leaves nothing to unwind and the
-        # only remaining gap to the submit is the pending-row write. The
-        # limiter token it may spend is entry-only and does not throttle exits.
-        # A confirmed-shut session is a skip; one that cannot be verified is a
-        # failure. Neither is a broker round-trip, so neither feeds the
-        # error-rate circuit breaker.
+        # pending-order reservation, so an entry outside the session leaves
+        # nothing to unwind and no order row. The limiter token it may spend is
+        # entry-only and does not throttle exits. Re-checked immediately before
+        # the submit below, because the reservation and pending-row write in
+        # between can themselves cross the close.
         session = await self._entry_session_state()
         if session != "open":
-            session_closed = session == "closed"
-            logger.warning(
-                "EXECUTION BLOCKED: options session not confirmed open",
-                extra={
-                    "event_type": "EXECUTION_BLOCKED",
-                    "reason": "Options Session Closed" if session_closed else "Options Session Unverified",
-                    "session_state": session,
-                    "ticker": candidate.ticker,
-                    "option_symbol": candidate.option_symbol,
-                },
-            )
-            if session_closed:
-                decision.executed_successfully = DecisionStatus.SKIPPED
-                decision.reason = "Options session closed"
-            else:
-                decision.executed_successfully = DecisionStatus.FALSE
-                decision.reason = "Options session unverified (calendar or broker clock unavailable)"
+            self._block_entry_outside_session(decision, candidate, session, stage="pre_reservation")
             return
 
         if hasattr(self.risk_manager, "update_post_trade"):
@@ -2053,6 +2065,25 @@ class ExecutionEngine:
             decision.executed_successfully = DecisionStatus.FALSE
             decision.reason = f"Pending-order persist failed: {e}"
             self._record_result(False)
+            return
+
+        # Immediately-before-submit re-check. Alpaca queues a day order placed
+        # after the close instead of rejecting it, so an entry whose session
+        # ended during the reservation or pending-row write above would rest
+        # overnight and open at the next session. Unwind the reservations and
+        # finalize the pending row as never submitted; not a broker round-trip,
+        # so nothing is recorded against the error-rate circuit breaker.
+        session = await self._entry_session_state()
+        if session != "open":
+            await self._remove_pending_order_compat(client_order_id)
+            if hasattr(self.risk_manager, "clear_intended_position_greeks"):
+                self.risk_manager.clear_intended_position_greeks(candidate.ticker)
+            reason = self._block_entry_outside_session(decision, candidate, session, stage="pre_submit")
+            await persist_order_finalize(
+                client_order_id=client_order_id,
+                broker_order=None,
+                error_message=f"Not submitted: {reason}",
+            )
             return
 
         try:
