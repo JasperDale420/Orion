@@ -55,7 +55,7 @@ async def _run(monitor, engine, n):
         with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
             last = None
             for _ in range(n):
-                last = await monitor.execute_exits(connector, [(_pos(), _pred())], dry_run=False)
+                last = await monitor.execute_exits([(_pos(), _pred())], dry_run=False)
             return last
 
 
@@ -152,7 +152,7 @@ async def test_deferral_covers_an_occ_position_with_no_entry_context():
     with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
         with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
             for _ in range(monitor._MAX_CONSECUTIVE_CLOSE_FAILURES * 2):
-                await monitor.execute_exits(MagicMock(), [(pos, _pred())], dry_run=False)
+                await monitor.execute_exits([(pos, _pred())], dry_run=False)
 
     assert pos.symbol not in monitor._consecutive_close_failures
     engine.close_position.assert_not_awaited()
@@ -171,7 +171,7 @@ async def test_bell_crossing_mid_batch_defers_only_the_closed_leg():
 
     with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
         with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
-            await monitor.execute_exits(MagicMock(), [(before, _pred()), (after, _pred())], dry_run=False)
+            await monitor.execute_exits([(before, _pred()), (after, _pred())], dry_run=False)
 
     assert monitor._consecutive_close_failures.get(before.symbol) == 1  # attempted, failed
     assert after.symbol not in monitor._consecutive_close_failures  # deferred, not charged
@@ -261,12 +261,12 @@ async def test_execute_exits_uses_short_cooldown_for_expiring_position(monkeypat
     with patch("orion.ml.performance_tracker.log_exit_prediction", new_callable=AsyncMock):
         with patch("orion.ml.performance_tracker.log_outcome", new_callable=AsyncMock):
             for _ in range(monitor._MAX_CONSECUTIVE_CLOSE_FAILURES):
-                await monitor.execute_exits(connector, [(_zero_dte_pos(), flatten)], dry_run=False)
+                await monitor.execute_exits([(_zero_dte_pos(), flatten)], dry_run=False)
             calls_at_threshold = engine.close_position.call_count
 
             # Past the flatten cooldown but well inside the standard one.
             clock["t"] += monitor._FLATTEN_ABANDON_COOLDOWN_SECONDS + 1.0
-            await monitor.execute_exits(connector, [(_zero_dte_pos(), flatten)], dry_run=False)
+            await monitor.execute_exits([(_zero_dte_pos(), flatten)], dry_run=False)
 
     assert engine.close_position.call_count == calls_at_threshold + 1
 

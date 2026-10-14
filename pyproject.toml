@@ -81,6 +81,7 @@ markers = [
     "integration: Tests with real DB, file I/O, or component interactions",
     "e2e: End-to-end full system flow tests",
     "slow: Tests that take >1s (opt-in, excluded by default)",
+    "real_entry_session_gate: Opt out of the autouse stub that confirms the options entry session open",
 ]
 
 [tool.coverage.run]
