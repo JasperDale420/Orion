@@ -307,3 +307,32 @@ async def test_unknown_session_state_is_attempted_and_charged():
 
     assert monitor._close_attempts_exhausted("SMH260605P00550000") is True
     assert engine.close_position.await_count == monitor._MAX_CONSECUTIVE_CLOSE_FAILURES
+
+
+@pytest.mark.asyncio
+async def test_dead_calendar_and_rate_limited_clock_is_charged_not_deferred():
+    """Integration of the real gate with the monitor: calendar down and the
+    broker clock answering 429 is an UNKNOWN session. The monitor must attempt
+    the close (which the engine's own gate fails closed) and charge it, so the
+    position is abandoned and alerted on rather than deferred forever."""
+    from orion.execution.execution_engine import ExecutionEngine
+
+    engine = ExecutionEngine.__new__(ExecutionEngine)
+    engine._market_schedule = MagicMock()
+    engine._market_schedule.is_market_open_for_options = MagicMock(
+        side_effect=RuntimeError("Cannot verify market hours without calendar")
+    )
+    client = MagicMock()
+    client.get_clock = AsyncMock(return_value={"is_open": True, "status_code": 429, "error": "rate limited"})
+    engine._get_gateway_client = lambda: client
+
+    async def gated_close(**_kwargs):
+        return await engine.options_close_window_open(require_fresh=True)
+
+    engine.close_position = AsyncMock(side_effect=gated_close)
+    monitor = PositionMonitor(execution_engine=engine, position_manager=PositionManager())
+
+    await _run(monitor, engine, monitor._MAX_CONSECUTIVE_CLOSE_FAILURES)
+
+    assert engine.close_position.await_count == monitor._MAX_CONSECUTIVE_CLOSE_FAILURES
+    assert monitor._close_attempts_exhausted("SMH260605P00550000") is True
