@@ -13,7 +13,7 @@ dependencies = [
     "pydantic>=2.14.1",
     "pydantic-settings>=2.16.0",
     # <2.1: under SQLAlchemy 2.1.1 a FeatureEngine persist task cancelled at event-loop close never finishes, hanging pytest until the CI job times out.
-    "sqlalchemy>=2.0.54,<2.1",
+    "sqlalchemy>=2.0.55,<2.1",
     "asyncpg>=0.32.0",
     "greenlet>=3.5.6",
     "python-dotenv>=1.2.3",
