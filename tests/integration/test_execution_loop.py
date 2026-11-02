@@ -16,7 +16,7 @@ from orion.storage.models_gold import CandidateTrade, StrategyDecision
 
 
 @pytest.mark.asyncio
-async def test_execution_loop_flow():
+async def test_execution_loop_flow(monkeypatch):
     print("--- STARTING TEST ---")
 
     # 1. Setup In-Memory DB
@@ -38,6 +38,14 @@ async def test_execution_loop_flow():
     # Re-import classes from reloaded modules
     from orion.execution.execution_engine import ExecutionEngine
     from orion.processing.signal_engine import SignalEngine
+
+    # The reload above swaps in a fresh ExecutionEngine class, discarding the
+    # autouse fixture's session-gate stub (it patched the pre-reload class).
+    # Re-apply it, or the flow only reaches the broker during market hours.
+    async def _entry_session_open(self):
+        return "open"
+
+    monkeypatch.setattr(ExecutionEngine, "_entry_session_state", _entry_session_open)
 
     # Create Tables
     async with test_engine.begin() as conn:
